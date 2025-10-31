@@ -12,6 +12,7 @@
     "db:migrate": "wrangler d1 migrations apply marketdojo_db --local",
     "db:migrate:prod": "wrangler d1 migrations apply marketdojo_db --remote",
     "db:studio": "drizzle-kit studio",
+    "db:seed": "tsx scripts/seed-lessons-sql.ts && wrangler d1 execute marketdojo_db --local --file=migrations/seed-lessons.sql",
     "lint": "eslint src",
     "format": "prettier --write \"src/**/*.{ts,tsx,js,jsx,json,css}\""
   },
@@ -36,6 +37,7 @@
     "drizzle-kit": "^0.31.6",
     "eslint": "^9.17.0",
     "prettier": "^3.4.2",
+    "tsx": "^4.20.6",
     "typescript": "^5.7.2",
     "vite": "^6.0.3",
     "wrangler": "^3.95.0"
