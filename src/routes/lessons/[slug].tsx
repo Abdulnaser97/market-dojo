@@ -3,6 +3,8 @@ import { createAsync, cache, A, useParams, useNavigate } from "@solidjs/router";
 import { Show, createMemo, For } from "solid-js";
 import { getSession } from "~/lib/auth";
 import Nav from "~/components/layout/Nav";
+import LessonQuiz from "~/components/quiz/LessonQuiz";
+import { getQuizForLesson } from "~/db/quiz-data";
 
 interface Lesson {
   id: string;
@@ -61,6 +63,10 @@ export default function LessonDetail() {
 
   const lesson = createMemo(() => lessonData()?.lesson);
   const allLessons = createMemo(() => allLessonsData()?.lessons || []);
+  const lessonQuiz = createMemo(() => {
+    const currentLesson = lesson();
+    return currentLesson ? getQuizForLesson(currentLesson.id) : undefined;
+  });
 
   const prevLesson = createMemo(() => {
     const current = lesson();
@@ -319,6 +325,25 @@ export default function LessonDetail() {
               class="lesson-content"
               innerHTML={renderMarkdown(currentLesson().content)}
             />
+
+            {/* Quiz Section */}
+            <Show when={lessonQuiz()}>
+              {(quiz) => (
+                <div style={{ "margin-bottom": "2rem" }}>
+                  <h2 style={{ "font-size": "1.75rem", "margin-bottom": "1rem" }}>
+                    Test Your Knowledge
+                  </h2>
+                  <LessonQuiz
+                    quiz={quiz()}
+                    onComplete={(score) => {
+                      console.log("Quiz completed with score:", score);
+                      // TODO: Save score to database in Phase 3.5
+                    }}
+                  />
+                </div>
+              )}
+            </Show>
+
             <style>{`
               .lesson-content h1 {
                 font-size: 2rem;
