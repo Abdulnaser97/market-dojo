@@ -72,8 +72,8 @@ export default function Nav() {
           "align-items": "center",
         }}
       >
-        <A href="/learn" style={{ "font-weight": "500", "text-decoration": "none" }}>
-          Learn
+        <A href="/lessons" style={{ "font-weight": "500", "text-decoration": "none" }}>
+          Lessons
         </A>
 
         <A href="/play" style={{ "font-weight": "500", "text-decoration": "none" }}>
