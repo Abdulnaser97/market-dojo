@@ -1,0 +1,9 @@
+dist
+.output
+.vinxi
+.wrangler
+node_modules
+coverage
+*.log
+package-lock.json
+pnpm-lock.yaml

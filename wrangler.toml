@@ -1,0 +1,17 @@
+name = "marketdojo"
+compatibility_date = "2024-11-01"
+pages_build_output_dir = ".output/public"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "marketdojo_db"
+database_id = "placeholder-id-run-wrangler-d1-create"
+
+[[kv_namespaces]]
+binding = "SESSION_KV"
+id = "placeholder-id-run-wrangler-kv-namespace-create"
+
+[vars]
+NODE_ENV = "production"
+
+# For local development, these will be created automatically by wrangler dev
