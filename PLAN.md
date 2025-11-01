@@ -221,119 +221,376 @@ This document outlines a phased approach to building MarketDojo from scratch.
 
 **Goal**: Build the `/play` route with real-time chart simulation and timed quizzes
 
-### Tasks
+**Implementation Strategy**: Phase 4 will be broken into incremental sub-phases that can be committed independently:
 
-1. **Lightweight Charts Integration**
-   - Install `lightweight-charts`
-   - Create `<ChartView>` component wrapper
+---
+
+### Phase 4.1: Charts & Static Data
+
+**Goal**: Set up charting library and historical data infrastructure
+
+**What it does**: Install charting library, create basic chart display component, seed database with historical price data, and create API to fetch it.
+
+**Tasks**:
+1. **Install Lightweight Charts**
+   - Add `lightweight-charts` dependency
+   - Create TypeScript type definitions if needed
+
+2. **Create Chart Component**
+   - Create `src/components/game/ChartView.tsx`
    - Configure chart appearance (dark theme, grid, crosshair)
-   - Test with static OHLCV data
+   - Test with hardcoded static OHLCV data
+   - Verify chart renders correctly
 
-2. **Historical Data Management**
-   - Seed `historical_data` table with sample datasets:
+3. **Historical Data Seeding**
+   - Create migration to seed `historical_data` table
+   - Add sample datasets:
      - Multiple symbols (BTC/USD, ETH/USD, SPY, etc.)
      - Multiple timeframes (1m, 5m, 15m, 1h, 4h, 1d)
      - At least 1000 candles per dataset
-   - Create API: `GET /api/market-data?symbol=BTC&timeframe=1h`
+   - Use realistic price data (can be synthetic or from public API)
+
+4. **API Endpoint**
+   - Create `GET /api/market-data?symbol=BTC&timeframe=1h`
+   - Fetch data from D1
    - Add KV caching for frequently accessed data
-
-3. **Web Worker Setup**
-   - Create `src/game/simulator.worker.ts`
-   - Implement message protocol:
-     - `START` → Initialize simulation
-     - `TICK` → Advance one candle
-     - `PAUSE` → Pause simulation
-     - `RESUME` → Resume simulation
-     - `SUBMIT_ANSWER` → Process quiz answer
-   - Handle simulation speed control (1x, 2x, 5x, 10x)
-
-4. **Simulation Engine**
-   - `SimulatorWorker` class:
-     - Load historical data
-     - Replay tick-by-tick with configurable speed
-     - Emit `CHART_UPDATE` messages to main thread
-     - Track current candle index and timestamp
-
-5. **Pattern Detection Service**
-   - Create `PatternService` class (runs in worker):
-     - Detect candlestick patterns in real-time:
-       - Doji, Hammer, Shooting Star
-       - Bullish/Bearish Engulfing
-       - Morning/Evening Star
-       - Harami, Piercing Line
-     - Use sliding window (last 3-5 candles)
-     - Return pattern metadata (name, confidence, location)
-
-6. **Quiz Scheduler**
-   - Create `QuizScheduler` class (in worker):
-     - Random intervals between 8-45 seconds
-     - Select pattern based on user mastery weights
-     - Higher weight = more frequent appearance
-     - Generate question with 4 options (1 correct + 3 distractors)
-     - Emit `QUIZ_EVENT` to main thread
-
-7. **Scoring Engine**
-   - Create `ScoringEngine` class (in worker):
-     - Track current score, streak, and combo multiplier
-     - Time pressure bonus (answer within 5s = +50%, within 10s = +20%)
-     - Streak multipliers (3+ correct = 1.5x, 5+ = 2x, 10+ = 3x)
-     - Update `pattern_mastery` after each answer:
-       - Correct answer: increase weight slightly
-       - Incorrect answer: increase weight significantly (need more practice)
-     - Persist session results to D1 on completion
-
-8. **Game UI Components**
-   - Create `/play` route (client-only, lazy loaded)
-   - `<GameHUD>` component:
-     - Score display
-     - Streak counter with animation
-     - Timer (session duration)
-     - Speed controls (1x, 2x, 5x, 10x)
-     - Pause button
-   - `<QuizDialog>` component:
-     - Timed question overlay (15-30s countdown)
-     - 4 multiple choice buttons
-     - Immediate visual feedback (green/red)
-     - Explanation after answer
-     - Auto-dismiss after 3 seconds
-   - `<SessionSummary>` component:
-     - Final score and accuracy
-     - Patterns tested breakdown
-     - Mastery level changes
-     - "Play Again" button
-
-9. **Game State Management**
-   - Use Solid signals for reactive state
-   - Sync worker messages with UI:
-     - Chart updates → `chartData` signal
-     - Quiz events → `currentQuiz` signal
-     - Score updates → `score`, `streak` signals
-   - Handle pause/resume logic
-   - Persist state to KV for session recovery
-
-10. **API Endpoints**
-    - `POST /api/session/start`:
-      - Create new session record
-      - Return session ID
-    - `POST /api/session/submit`:
-      - Accept session results payload
-      - Update `session_results` table
-      - Batch update `pattern_mastery` table
-      - Return updated mastery stats
+   - Return OHLCV format compatible with Lightweight Charts
 
 **Deliverables**:
-- ✅ Chart displays and animates historical data
-- ✅ Quizzes appear at random intervals
-- ✅ Scoring and streaks work correctly
-- ✅ Pattern mastery updates after each session
-- ✅ Session results persist to D1
-- ✅ Game is performant (60fps chart rendering)
+- ✅ Chart component displays static candlestick data
+- ✅ Database contains historical price data
+- ✅ API endpoint returns cached market data
+- ✅ Chart is styled and responsive
+
+---
+
+### Phase 4.2: Pattern Detection Service
+
+**Goal**: Create standalone pattern recognition algorithms
+
+**What it does**: Build a service that can analyze candlestick data and identify common trading patterns (Doji, Hammer, Engulfing, etc.).
+
+**Tasks**:
+1. **Create Pattern Detection Class**
+   - Create `src/game/PatternService.ts`
+   - Implement detection algorithms for:
+     - Doji (all variants: Standard, Long-legged, Dragonfly, Gravestone)
+     - Hammer & Hanging Man
+     - Shooting Star & Inverted Hammer
+     - Bullish/Bearish Engulfing
+     - Morning/Evening Star
+     - Harami (Bullish/Bearish)
+     - Piercing Line & Dark Cloud Cover
+
+2. **Pattern Metadata**
+   - Return pattern objects with:
+     - `name`: Pattern name
+     - `type`: "reversal" | "continuation" | "neutral"
+     - `confidence`: 0-100 score
+     - `candleIndices`: Array of indices forming pattern
+     - `sentiment`: "bullish" | "bearish" | "neutral"
+
+3. **Sliding Window Analysis**
+   - Use 3-5 candlestick sliding window
+   - Analyze each window for pattern matches
+   - Handle edge cases (not enough data, incomplete patterns)
+
+4. **Unit Tests**
+   - Test each pattern detection with known examples
+   - Verify confidence scores are accurate
+   - Test edge cases and false positives
+
+**Deliverables**:
+- ✅ Pattern detection algorithms work correctly
+- ✅ Can identify 10+ candlestick patterns
+- ✅ Returns accurate metadata and confidence scores
+- ✅ Unit tests pass for all patterns
+
+---
+
+### Phase 4.3: UI Shell (Game Layout)
+
+**Goal**: Create the visual structure for the game without functionality
+
+**What it does**: Build the `/play` route layout with all UI components (HUD, controls, quiz dialog) as non-functional shells. Like building a stage before the actors arrive.
+
+**Tasks**:
+1. **Create /play Route**
+   - Create `src/routes/play.tsx`
+   - Make it client-only and lazy-loaded
+   - Protected route (requires authentication)
+
+2. **Game HUD Component**
+   - Create `src/components/game/GameHUD.tsx`
+   - Display areas for:
+     - Current score (starts at 0)
+     - Streak counter (starts at 0)
+     - Session timer (00:00)
+     - Speed controls (1x, 2x, 5x, 10x buttons - non-functional)
+     - Pause button (non-functional)
+   - Style with consistent theme
+
+3. **Quiz Dialog Component**
+   - Create `src/components/game/QuizDialog.tsx`
+   - Modal overlay design
+   - Question text area
+   - 4 multiple choice buttons
+   - Countdown timer display (visual only)
+   - Explanation section (hidden initially)
+   - Non-functional for now (just UI)
+
+4. **Session Summary Component**
+   - Create `src/components/game/SessionSummary.tsx`
+   - Display final score
+   - Patterns tested breakdown (table/list)
+   - Accuracy percentage
+   - Mastery level changes (+/- indicators)
+   - "Play Again" and "Back to Lessons" buttons
+
+5. **Layout Integration**
+   - Arrange components on `/play` page:
+     - Chart takes center stage (large)
+     - HUD overlaid in top-right corner
+     - Quiz dialog appears centered over chart
+     - Session summary appears at end
+   - Ensure responsive layout works on different screen sizes
+
+**Deliverables**:
+- ✅ /play route is accessible and protected
+- ✅ All UI components render with placeholder content
+- ✅ Layout is responsive and visually polished
+- ✅ No functionality yet, but everything looks ready
+
+---
+
+### Phase 4.4: Simulation Engine
+
+**Goal**: Make historical chart data "play back" like a live market
+
+**What it does**: Creates a Web Worker that replays historical candlestick data tick-by-tick, making the chart animate as if the market is happening in real-time. Like playing a recorded football game.
+
+**Tasks**:
+1. **Web Worker Setup**
+   - Create `src/game/simulator.worker.ts`
+   - Set up message protocol between worker and main thread:
+     - `START` → Initialize simulation with data
+     - `TICK` → Send next candlestick to chart
+     - `PAUSE` → Pause simulation
+     - `RESUME` → Resume simulation
+     - `STOP` → End simulation
+     - `SET_SPEED` → Change playback speed (1x, 2x, 5x, 10x)
+
+2. **Simulation Engine Class**
+   - Create `SimulatorWorker` class inside worker:
+     - `loadData(symbol, timeframe)` - Fetch historical data from API
+     - `start()` - Begin playback
+     - `tick()` - Advance to next candlestick
+     - `pause()` / `resume()` - Control playback
+     - `setSpeed(multiplier)` - Adjust playback speed
+   - Track state:
+     - Current candlestick index
+     - Playback speed multiplier
+     - Pause/play status
+     - Loaded data array
+
+3. **Tick Loop**
+   - Use `setInterval` or `setTimeout` for ticking
+   - Calculate interval based on speed: `baseInterval / speedMultiplier`
+   - Emit `CHART_UPDATE` message with candlestick data each tick
+   - Auto-stop when all candlesticks are played
+
+4. **Main Thread Integration**
+   - Connect worker to `/play` route
+   - Listen for `CHART_UPDATE` messages
+   - Update chart data signal reactively
+   - Wire up HUD controls (speed, pause/resume)
+   - Display chart animating in real-time
+
+**Deliverables**:
+- ✅ Chart animates candlestick-by-candlestick
+- ✅ Speed controls work (1x, 2x, 5x, 10x)
+- ✅ Pause/resume works correctly
+- ✅ Simulation runs smoothly at 60fps
+- ✅ Worker doesn't block UI thread
+
+---
+
+### Phase 4.5: Quiz System
+
+**Goal**: Interrupt chart playback with timed pattern recognition quizzes
+
+**What it does**: While the chart animates (from Phase 4.4), randomly schedule quiz questions that ask users to identify patterns. Includes visual highlighting of the pattern being tested.
+
+**Tasks**:
+1. **Quiz Scheduler (in Worker)**
+   - Create `QuizScheduler` class inside worker
+   - Schedule quizzes at random intervals (8-45 seconds)
+   - Use pattern detection (Phase 4.2) to find patterns in current chart data
+   - Select pattern based on user mastery weights (fetch from API)
+   - Higher weight = more frequent appearance (adaptive difficulty)
+
+2. **Quiz Generation**
+   - When quiz scheduled:
+     - Detect pattern using `PatternService`
+     - Generate question: "What pattern is forming here?"
+     - Generate 4 options:
+       - 1 correct answer (detected pattern)
+       - 3 distractors (random other pattern names)
+     - Include explanation text for after answer
+   - Emit `QUIZ_EVENT` message to main thread with quiz data
+
+3. **Visual Highlighting System**
+   - When quiz appears on screen:
+     - Semi-transparent dark overlay (75% opacity) dims entire chart
+     - Bright highlight box with glow around pattern candlesticks
+     - Calculate pixel coordinates for pattern location
+     - Use pattern metadata `candleIndices` to position highlight
+   - Highlight effects:
+     - Subtle pulsing animation to draw attention
+     - Color-coded border (category color or primary)
+     - Clear visual separation from dimmed chart
+   - Remove overlay when quiz dismissed
+
+4. **Quiz Dialog Integration**
+   - Listen for `QUIZ_EVENT` in main thread
+   - Show `QuizDialog` component with question
+   - Display 15-30 second countdown timer
+   - Pause chart simulation while quiz is active
+   - Render chart highlight overlay
+
+5. **Answer Handling**
+   - User selects answer (A/B/C/D)
+   - Send `SUBMIT_ANSWER` message to worker
+   - Worker validates answer
+   - Immediate visual feedback:
+     - Green checkmark for correct
+     - Red X for incorrect
+   - Show explanation text
+   - Auto-dismiss after 3 seconds
+   - Resume chart simulation
+   - Remove highlight overlay
+
+6. **Game State Synchronization**
+   - Use Solid signals for reactive state:
+     - `currentQuiz` - Current quiz data or null
+     - `quizActive` - Boolean for showing dialog
+     - `highlightPattern` - Pattern indices to highlight
+   - Update signals when worker sends messages
+
+**Deliverables**:
+- ✅ Quizzes appear at random intervals during simulation
+- ✅ Pattern is visually highlighted with vignette effect
+- ✅ Countdown timer works
+- ✅ Answer validation provides immediate feedback
+- ✅ Chart pauses during quiz, resumes after
+- ✅ Explanation displays after answer
+- ✅ Highlight overlay removes cleanly
+
+**Visual Highlighting Specification**:
+- **Vignette overlay**: Semi-transparent black (rgba(0,0,0,0.75)) covering full chart
+- **Highlight cutout**: Clear window around pattern candlesticks
+- **Highlight border**: 2-3px colored glow/border around pattern
+- **Animation**: Subtle pulse (0.8s duration, ease-in-out)
+- **Positioning**: Calculate from candlestick indices and chart dimensions
+- **Responsive**: Adjust highlight size based on chart zoom/scale
+
+---
+
+### Phase 4.6: Scoring & Persistence
+
+**Goal**: Track performance, calculate scores with multipliers, and save session results
+
+**What it does**: Implements the scoring system with streak bonuses and time pressure, updates pattern mastery based on performance, and persists session results to the database.
+
+**Tasks**:
+1. **Scoring Engine (in Worker)**
+   - Create `ScoringEngine` class inside worker
+   - Track metrics:
+     - Current score (starts at 0)
+     - Current streak (consecutive correct answers)
+     - Combo multiplier (based on streak)
+     - Total questions answered
+     - Correct/incorrect counts
+
+2. **Score Calculation Rules**
+   - Base points per question: 100
+   - Time pressure bonus:
+     - Answer within 5s: +50% (150 points)
+     - Answer within 10s: +20% (120 points)
+     - Answer after 10s: base 100 points
+   - Streak multipliers:
+     - 3+ correct in a row: 1.5x multiplier
+     - 5+ correct in a row: 2x multiplier
+     - 10+ correct in a row: 3x multiplier
+   - Incorrect answer: 0 points, reset streak
+
+3. **Pattern Mastery Updates**
+   - After each answer, update mastery weights:
+     - Correct answer: decrease weight slightly (user knows this pattern)
+     - Incorrect answer: increase weight significantly (needs more practice)
+   - Weights affect future quiz scheduling
+   - Track per-pattern accuracy over time
+
+4. **Session Summary Calculation**
+   - At end of simulation:
+     - Calculate final score
+     - Calculate overall accuracy (correct / total)
+     - Generate patterns tested breakdown (count per pattern type)
+     - Calculate mastery changes (before/after weights)
+
+5. **API Endpoints**
+   - `POST /api/session/start`
+     - Create new session record in `session_results` table
+     - Return session ID
+   - `POST /api/session/submit`
+     - Accept payload:
+       - Session ID
+       - Final score
+       - Accuracy
+       - Patterns tested (array)
+       - Duration
+     - Update `session_results` table
+     - Batch update `pattern_mastery` table
+     - Return updated mastery stats
+
+6. **Session Summary Component**
+   - Wire up with real data from scoring engine
+   - Display all calculated metrics
+   - Show mastery level changes with +/- indicators
+   - "Play Again" button resets and starts new session
+   - "Back to Lessons" navigates to `/lessons`
+
+7. **Integration**
+   - Connect scoring engine to quiz answer handler
+   - Update HUD score/streak displays in real-time
+   - Emit score updates to main thread after each answer
+   - Persist to database when simulation ends
+   - Display session summary when complete
+
+**Deliverables**:
+- ✅ Scoring works with time bonuses and streak multipliers
+- ✅ Pattern mastery updates based on performance
+- ✅ Session results persist to database
+- ✅ Session summary shows accurate statistics
+- ✅ HUD displays update in real-time
+- ✅ Can play multiple sessions (data saves correctly)
+
+---
+
+**Overall Phase 4 Deliverables**:
+- ✅ Chart displays and animates historical data (4.1, 4.4)
+- ✅ Quizzes appear at random intervals with visual highlighting (4.5)
+- ✅ Scoring and streaks work correctly (4.6)
+- ✅ Pattern mastery updates after each session (4.6)
+- ✅ Session results persist to D1 (4.6)
+- ✅ Game is performant (60fps chart rendering) (4.4)
 
 **Performance Targets**:
 - Chart renders at 60fps during simulation
 - Worker processes quiz answers within 50ms
 - Pattern detection completes within 100ms per candle
 - Session data persists within 500ms
+- Visual highlighting renders smoothly without jank
 
 ---
 
