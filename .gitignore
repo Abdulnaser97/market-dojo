@@ -38,3 +38,6 @@ coverage/
 
 # Drizzle
 drizzle/
+
+# Generated seed data (large files)
+migrations/seed-historical-data.sql
