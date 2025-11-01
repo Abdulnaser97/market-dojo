@@ -25,7 +25,7 @@ interface LessonsResponse {
 
 interface ProgressResponse {
   success: boolean;
-  progress: Record<string, { completed: boolean; score: number | null }>;
+  progress: Record<string, { completed: boolean; score: number | null; lastAccessed: string | null }>;
 }
 
 const getLessons = query(async (category?: string) => {
@@ -70,11 +70,12 @@ const getProgress = query(async () => {
   console.log("[getProgress] Found progress records:", userProgress.length);
 
   // Transform into a map for easier lookup by lessonId
-  const progressMap: Record<string, { completed: boolean; score: number | null }> = {};
+  const progressMap: Record<string, { completed: boolean; score: number | null; lastAccessed: string | null }> = {};
   for (const progress of userProgress) {
     progressMap[progress.lessonId] = {
       completed: progress.completed,
       score: progress.score,
+      lastAccessed: progress.lastAccessed,
     };
   }
   console.log("[getProgress] Progress map:", progressMap);
@@ -124,6 +125,65 @@ export default function Lessons() {
         return "var(--color-primary)";
     }
   };
+
+  // Recommendation algorithm
+  const recommendedLessons = createMemo(() => {
+    if (!isMounted() || !session() || !lessonsData() || !progressData()) {
+      return [];
+    }
+
+    const lessons = lessonsData()!.lessons;
+    const progress = progressData()!.progress;
+    const now = new Date();
+
+    type LessonWithScore = Lesson & { priorityScore: number; reason: string };
+
+    const scoredLessons: LessonWithScore[] = lessons.map((lesson) => {
+      const lessonProgress = progress[lesson.id];
+      let priorityScore = 0;
+      let reason = "";
+
+      if (!lessonProgress) {
+        // Never started - high priority
+        priorityScore = 100;
+        reason = "Start your journey";
+      } else if (!lessonProgress.completed) {
+        // Started but not completed - very high priority
+        priorityScore = 90;
+        reason = "Continue learning";
+      } else if (lessonProgress.score !== null && lessonProgress.score < 80) {
+        // Completed with low score - high priority for review
+        priorityScore = 80;
+        reason = `Review (${lessonProgress.score}% last time)`;
+      } else if (lessonProgress.lastAccessed) {
+        // Check if it's been a while since last access
+        const lastAccessed = new Date(lessonProgress.lastAccessed);
+        const daysSinceAccess = Math.floor((now.getTime() - lastAccessed.getTime()) / (1000 * 60 * 60 * 24));
+
+        if (daysSinceAccess > 14) {
+          // More than 2 weeks - suggest review
+          priorityScore = 50;
+          reason = "Refresh your knowledge";
+        } else if (daysSinceAccess > 7) {
+          // More than 1 week - lower priority review
+          priorityScore = 30;
+          reason = "Quick review";
+        }
+      }
+
+      return {
+        ...lesson,
+        priorityScore,
+        reason,
+      };
+    });
+
+    // Sort by priority score (descending) and take top 3
+    return scoredLessons
+      .filter((lesson) => lesson.priorityScore > 0)
+      .sort((a, b) => b.priorityScore - a.priorityScore)
+      .slice(0, 3);
+  });
 
   return (
     <main>
@@ -234,6 +294,175 @@ export default function Lessons() {
             </div>
           </Show>
         </div>
+
+        {/* Recommended for You */}
+        <Show when={isMounted() && session() && recommendedLessons().length > 0}>
+          <div style={{ "margin-bottom": "2rem" }}>
+            <div style={{ display: "flex", "align-items": "center", gap: "0.5rem", "margin-bottom": "1rem" }}>
+              <svg
+                style={{ width: "1.25rem", height: "1.25rem", color: "var(--color-primary)" }}
+                fill="currentColor"
+                viewBox="0 0 24 24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+              </svg>
+              <h2 style={{ "font-size": "1.25rem", "font-weight": "600" }}>Recommended for You</h2>
+            </div>
+
+            <div style={{ display: "grid", "grid-template-columns": "repeat(auto-fit, minmax(250px, 1fr))", gap: "1rem" }}>
+              <For each={recommendedLessons()}>
+                {(lesson) => (
+                  <A
+                    href={`/lessons/${lesson.slug}`}
+                    style={{
+                      padding: "1.5rem",
+                      "background-color": "var(--color-bg-secondary)",
+                      "border-radius": "0.75rem",
+                      border: "1px solid var(--color-border)",
+                      "text-decoration": "none",
+                      display: "flex",
+                      "flex-direction": "column",
+                      transition: "all 0.2s",
+                      position: "relative",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.borderColor = getCategoryColor(lesson.category);
+                      e.currentTarget.style.transform = "translateY(-2px)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = "var(--color-border)";
+                      e.currentTarget.style.transform = "translateY(0)";
+                    }}
+                  >
+                    {/* Recommended Badge */}
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: "-0.5rem",
+                        left: "-0.5rem",
+                        width: "2rem",
+                        height: "2rem",
+                        "background-color": "var(--color-primary)",
+                        "border-radius": "50%",
+                        display: "flex",
+                        "align-items": "center",
+                        "justify-content": "center",
+                        border: "3px solid var(--color-bg)",
+                        "box-shadow": "0 2px 8px rgba(0, 0, 0, 0.15)",
+                      }}
+                      title="Recommended for you"
+                    >
+                      <svg
+                        style={{
+                          width: "1rem",
+                          height: "1rem",
+                          color: "white",
+                        }}
+                        fill="currentColor"
+                        viewBox="0 0 24 24"
+                        xmlns="http://www.w3.org/2000/svg"
+                      >
+                        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                      </svg>
+                    </div>
+
+                    {/* Category & Difficulty */}
+                    <div
+                      style={{
+                        display: "flex",
+                        "justify-content": "space-between",
+                        "align-items": "center",
+                        "margin-bottom": "1rem",
+                      }}
+                    >
+                      <span
+                        style={{
+                          "font-size": "0.75rem",
+                          "font-weight": "600",
+                          padding: "0.25rem 0.75rem",
+                          "background-color": getCategoryColor(lesson.category) + "20",
+                          color: getCategoryColor(lesson.category),
+                          "border-radius": "0.375rem",
+                          "text-transform": "capitalize",
+                        }}
+                      >
+                        {lesson.category}
+                      </span>
+                      <div style={{ display: "flex", gap: "0.125rem", "align-items": "flex-end", height: "1rem" }}>
+                        <For each={Array(5)}>
+                          {(_, i) => (
+                            <div
+                              style={{
+                                width: "0.25rem",
+                                height: `${(i() + 1) * 0.15}rem`,
+                                "background-color": i() < lesson.difficulty
+                                  ? getCategoryColor(lesson.category)
+                                  : "#27272a",
+                                "border-radius": "0.125rem",
+                                transition: "background-color 0.2s",
+                              }}
+                            />
+                          )}
+                        </For>
+                      </div>
+                    </div>
+
+                    {/* Title */}
+                    <h3 style={{ "margin-bottom": "0.75rem", "font-size": "1.125rem" }}>{lesson.title}</h3>
+
+                    {/* Reason */}
+                    <p
+                      style={{
+                        color: "var(--color-text-secondary)",
+                        "font-size": "0.875rem",
+                        "line-height": "1.5",
+                        "flex-grow": "1",
+                        "margin-bottom": "1rem",
+                      }}
+                    >
+                      {lesson.reason}
+                    </p>
+
+                    {/* Footer */}
+                    <div
+                      style={{
+                        display: "flex",
+                        "justify-content": "space-between",
+                        "align-items": "center",
+                        "padding-top": "1rem",
+                        "border-top": "1px solid var(--color-border)",
+                        "font-size": "0.875rem",
+                      }}
+                    >
+                      <span style={{ color: "var(--color-text-secondary)" }}>Lesson #{lesson.order}</span>
+                      <span
+                        style={{
+                          color: getCategoryColor(lesson.category),
+                          "font-weight": "500",
+                          display: "flex",
+                          "align-items": "center",
+                          gap: "0.25rem",
+                        }}
+                      >
+                        Start Learning
+                        <svg
+                          style={{ width: "1rem", height: "1rem" }}
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                          xmlns="http://www.w3.org/2000/svg"
+                        >
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                        </svg>
+                      </span>
+                    </div>
+                  </A>
+                )}
+              </For>
+            </div>
+          </div>
+        </Show>
 
         {/* Category Filter */}
         <div style={{ "margin-bottom": "2rem" }}>
