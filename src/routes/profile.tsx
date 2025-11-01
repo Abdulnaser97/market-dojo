@@ -1,17 +1,89 @@
 import { Title } from "@solidjs/meta";
-import { cache, createAsync, useNavigate, revalidate } from "@solidjs/router";
+import { query, createAsync, useNavigate, revalidate } from "@solidjs/router";
 import { Show, createEffect } from "solid-js";
 import Nav from "~/components/layout/Nav";
 import { getSession } from "~/lib/auth";
 
-const getUserSession = cache(async () => {
+const getUserSession = query(async () => {
   "use server";
   return await getSession();
 }, "user-session");
 
+interface ProfileStats {
+  lessonsCompleted: number;
+  totalLessons: number;
+  quizSessions: number;
+  averageAccuracy: number;
+}
+
+const getUserStats = query(async (): Promise<ProfileStats> => {
+  "use server";
+  console.log("[getUserStats] Cache function called");
+
+  const session = await getSession();
+  console.log("[getUserStats] Session:", session ? "Found" : "Not found");
+
+  if (!session || !session.user) {
+    console.log("[getUserStats] No session, returning empty stats");
+    return {
+      lessonsCompleted: 0,
+      totalLessons: 0,
+      quizSessions: 0,
+      averageAccuracy: 0,
+    };
+  }
+
+  const { getDbFromContext } = await import("~/lib/auth");
+  const schemaModule = await import("~/db/schema");
+  const { lessonProgress, lessons, sessionResults } = schemaModule;
+  type LessonProgress = typeof schemaModule.lessonProgress.$inferSelect;
+  const { eq, count } = await import("drizzle-orm");
+
+  const db = getDbFromContext();
+
+  // Get total lessons count
+  const [totalLessonsResult] = await db
+    .select({ count: count() })
+    .from(lessons);
+  const totalLessons = totalLessonsResult.count;
+  console.log("[getUserStats] Total lessons:", totalLessons);
+
+  // Get completed lessons count
+  const completedLessons = await db.query.lessonProgress.findMany({
+    where: eq(lessonProgress.userId, session.user.id),
+  });
+  const lessonsCompleted = completedLessons.filter((p: LessonProgress) => p.completed).length;
+  console.log("[getUserStats] Completed lessons:", lessonsCompleted);
+
+  // Get quiz sessions count (from session_results table)
+  const quizSessions = await db.query.sessionResults.findMany({
+    where: eq(sessionResults.userId, session.user.id),
+  });
+  const quizSessionsCount = quizSessions.length;
+  console.log("[getUserStats] Quiz sessions:", quizSessionsCount);
+
+  // Calculate average accuracy from completed lessons
+  const scoresWithValues = completedLessons.filter((p: LessonProgress) => p.score !== null && p.completed);
+  const averageAccuracy = scoresWithValues.length > 0
+    ? Math.round(scoresWithValues.reduce((sum: number, p: LessonProgress) => sum + (p.score || 0), 0) / scoresWithValues.length)
+    : 0;
+  console.log("[getUserStats] Average accuracy:", averageAccuracy);
+
+  const stats = {
+    lessonsCompleted,
+    totalLessons,
+    quizSessions: quizSessionsCount,
+    averageAccuracy,
+  };
+  console.log("[getUserStats] Returning stats:", stats);
+
+  return stats;
+}, "user-stats");
+
 export default function Profile() {
   const navigate = useNavigate();
   const session = createAsync(() => getUserSession());
+  const stats = createAsync(() => getUserStats());
 
   // Redirect if not authenticated
   createEffect(() => {
@@ -133,7 +205,7 @@ export default function Profile() {
                         color: "var(--color-primary)",
                       }}
                     >
-                      0
+                      {stats()?.lessonsCompleted || 0} / {stats()?.totalLessons || 0}
                     </div>
                     <div
                       style={{
@@ -151,6 +223,7 @@ export default function Profile() {
                       "background-color": "var(--color-bg)",
                       "border-radius": "0.5rem",
                       "text-align": "center",
+                      opacity: "0.6",
                     }}
                   >
                     <div
@@ -160,7 +233,7 @@ export default function Profile() {
                         color: "var(--color-success)",
                       }}
                     >
-                      0
+                      {stats()?.quizSessions || 0}
                     </div>
                     <div
                       style={{
@@ -168,7 +241,17 @@ export default function Profile() {
                         color: "var(--color-text-secondary)",
                       }}
                     >
-                      Quiz Sessions
+                      Game Sessions
+                    </div>
+                    <div
+                      style={{
+                        "margin-top": "0.25rem",
+                        "font-size": "0.75rem",
+                        color: "var(--color-text-secondary)",
+                        "font-style": "italic",
+                      }}
+                    >
+                      (Coming Soon)
                     </div>
                   </div>
 
@@ -187,7 +270,7 @@ export default function Profile() {
                         color: "var(--color-text)",
                       }}
                     >
-                      0%
+                      {stats()?.averageAccuracy || 0}%
                     </div>
                     <div
                       style={{

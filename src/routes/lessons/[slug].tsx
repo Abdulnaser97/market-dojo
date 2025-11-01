@@ -1,6 +1,6 @@
 import { Title } from "@solidjs/meta";
-import { createAsync, cache, A, useParams, useNavigate } from "@solidjs/router";
-import { Show, createMemo, For } from "solid-js";
+import { createAsync, query, A, useParams, revalidate } from "@solidjs/router";
+import { Show, createMemo, For, createSignal } from "solid-js";
 import { getSession } from "~/lib/auth";
 import Nav from "~/components/layout/Nav";
 import LessonQuiz from "~/components/quiz/LessonQuiz";
@@ -30,7 +30,7 @@ interface LessonsResponse {
   total: number;
 }
 
-const getLesson = cache(async (slug: string) => {
+const getLesson = query(async (slug: string) => {
   "use server";
   const response = await fetch(`http://localhost:3000/api/lessons/${slug}`);
   if (!response.ok) {
@@ -39,7 +39,7 @@ const getLesson = cache(async (slug: string) => {
   return (await response.json()) as LessonResponse;
 }, "lesson-detail");
 
-const getAllLessons = cache(async () => {
+const getAllLessons = query(async () => {
   "use server";
   const response = await fetch("http://localhost:3000/api/lessons");
   if (!response.ok) {
@@ -48,15 +48,35 @@ const getAllLessons = cache(async () => {
   return (await response.json()) as LessonsResponse;
 }, "all-lessons-nav");
 
-const getUserSession = cache(async () => {
+const getLessonProgress = query(async (lessonId: string) => {
   "use server";
-  return await getSession();
-}, "lesson-detail-session");
+  console.log("[getLessonProgress] Fetching progress for lesson:", lessonId);
+
+  const session = await getSession();
+  if (!session || !session.user) {
+    console.log("[getLessonProgress] No session, returning null");
+    return null;
+  }
+
+  const { getDbFromContext } = await import("~/lib/auth");
+  const { lessonProgress } = await import("~/db/schema");
+  const { eq, and } = await import("drizzle-orm");
+
+  const db = getDbFromContext();
+
+  const progress = await db.query.lessonProgress.findFirst({
+    where: and(
+      eq(lessonProgress.userId, session.user.id),
+      eq(lessonProgress.lessonId, lessonId)
+    ),
+  });
+
+  console.log("[getLessonProgress] Progress found:", progress ? `Score: ${progress.score}, Completed: ${progress.completed}` : "None");
+  return progress;
+}, "lesson-progress");
 
 export default function LessonDetail() {
   const params = useParams();
-  const navigate = useNavigate();
-  const session = createAsync(() => getUserSession());
 
   const lessonData = createAsync(() => getLesson(params.slug));
   const allLessonsData = createAsync(() => getAllLessons());
@@ -67,6 +87,21 @@ export default function LessonDetail() {
     const currentLesson = lesson();
     return currentLesson ? getQuizForLesson(currentLesson.id) : undefined;
   });
+
+  // Fetch lesson progress - depends on lessonData being loaded first
+  const lessonProgress = createAsync(async () => {
+    const data = lessonData(); // This creates the dependency on lessonData
+    console.log("[LessonDetail] Fetching progress, lesson data:", data?.lesson?.id, data?.lesson?.title);
+    if (!data?.lesson) {
+      console.log("[LessonDetail] No lesson data yet, returning null");
+      return null;
+    }
+    console.log("[LessonDetail] Calling getLessonProgress for:", data.lesson.id);
+    return getLessonProgress(data.lesson.id);
+  });
+
+  // Track whether user wants to retake the quiz
+  const [isRetakingQuiz, setIsRetakingQuiz] = createSignal(false);
 
   const prevLesson = createMemo(() => {
     const current = lesson();
@@ -333,13 +368,135 @@ export default function LessonDetail() {
                   <h2 style={{ "font-size": "1.75rem", "margin-bottom": "1rem" }}>
                     Test Your Knowledge
                   </h2>
-                  <LessonQuiz
-                    quiz={quiz()}
-                    onComplete={(score) => {
-                      console.log("Quiz completed with score:", score);
-                      // TODO: Save score to database in Phase 3.5
-                    }}
-                  />
+
+                  {/* Show completion summary if quiz was already completed */}
+                  <Show
+                    when={!lessonProgress()?.completed || isRetakingQuiz()}
+                    fallback={
+                        <div
+                          style={{
+                            padding: "2rem",
+                            "background-color": "var(--color-bg-secondary)",
+                            "border-radius": "0.75rem",
+                            border: "1px solid var(--color-border)",
+                            "text-align": "center",
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: "4rem",
+                              height: "4rem",
+                              "background-color": "var(--color-success)",
+                              "border-radius": "50%",
+                              display: "flex",
+                              "align-items": "center",
+                              "justify-content": "center",
+                              margin: "0 auto 1rem",
+                            }}
+                          >
+                            <svg
+                              style={{
+                                width: "2.5rem",
+                                height: "2.5rem",
+                                color: "white",
+                              }}
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                              xmlns="http://www.w3.org/2000/svg"
+                            >
+                              <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="3"
+                                d="M5 13l4 4L19 7"
+                              />
+                            </svg>
+                          </div>
+                          <h3 style={{ "font-size": "1.5rem", "margin-bottom": "0.5rem" }}>
+                            Quiz Completed!
+                          </h3>
+                          <div
+                            style={{
+                              "font-size": "3rem",
+                              "font-weight": "700",
+                              color: lessonProgress()?.score && lessonProgress()!.score >= 70 ? "var(--color-success)" : "var(--color-warning)",
+                              "margin-bottom": "0.5rem",
+                            }}
+                          >
+                            {lessonProgress()?.score || 0}%
+                          </div>
+                          <p style={{ color: "var(--color-text-secondary)", "margin-bottom": "2rem" }}>
+                            {lessonProgress()?.score && lessonProgress()!.score >= 70
+                              ? "Great job! You passed this lesson."
+                              : "You completed the quiz. Try retaking it to improve your score!"}
+                          </p>
+                          <button
+                            onClick={() => setIsRetakingQuiz(true)}
+                            style={{
+                              padding: "0.75rem 1.5rem",
+                              "background-color": "var(--color-primary)",
+                              color: "white",
+                              border: "none",
+                              "border-radius": "0.5rem",
+                              "font-weight": "500",
+                              cursor: "pointer",
+                              transition: "background-color 0.2s",
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = "var(--color-primary-hover)";
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = "var(--color-primary)";
+                            }}
+                          >
+                            Retake Quiz
+                          </button>
+                        </div>
+                      }
+                    >
+                      <LessonQuiz
+                        quiz={quiz()}
+                        onComplete={async (score) => {
+                          console.log("[LessonDetail] onComplete callback received!");
+                          console.log("[LessonDetail] Score:", score);
+                          console.log("[LessonDetail] Lesson slug:", params.slug);
+
+                          try {
+                            console.log("[LessonDetail] Sending POST to /api/lessons/" + params.slug + "/complete");
+                            const response = await fetch(`/api/lessons/${params.slug}/complete`, {
+                              method: "POST",
+                              headers: {
+                                "Content-Type": "application/json",
+                              },
+                              body: JSON.stringify({ score }),
+                            });
+
+                            console.log("[LessonDetail] Response status:", response.status);
+                            const data = await response.json() as { success: boolean; progress?: any; error?: string };
+                            console.log("[LessonDetail] Response data:", data);
+
+                            if (data.success) {
+                              console.log("[LessonDetail] Progress saved successfully:", data.progress);
+                              // Revalidate the progress cache so it updates on the lessons page
+                              console.log("[LessonDetail] Revalidating caches...");
+                              revalidate("lessons-progress");
+                              // Also revalidate user stats for the profile page
+                              revalidate("user-stats");
+                              // Revalidate lesson progress
+                              revalidate("lesson-progress");
+                              console.log("[LessonDetail] Caches revalidated!");
+                              // Reset retaking state
+                              setIsRetakingQuiz(false);
+                            } else {
+                              console.error("[LessonDetail] Failed to save progress:", data.error);
+                            }
+                          } catch (error) {
+                            console.error("[LessonDetail] Error saving progress:", error);
+                          }
+                        }}
+                      />
+                    </Show>
                 </div>
               )}
             </Show>

@@ -1,6 +1,6 @@
 import { Title } from "@solidjs/meta";
-import { createAsync, cache, A, useSearchParams } from "@solidjs/router";
-import { For, Show, createMemo } from "solid-js";
+import { createAsync, query, A, useSearchParams } from "@solidjs/router";
+import { For, Show, createMemo, onMount, createSignal } from "solid-js";
 import { getSession } from "~/lib/auth";
 import Nav from "~/components/layout/Nav";
 
@@ -23,7 +23,12 @@ interface LessonsResponse {
   total: number;
 }
 
-const getLessons = cache(async (category?: string) => {
+interface ProgressResponse {
+  success: boolean;
+  progress: Record<string, { completed: boolean; score: number | null }>;
+}
+
+const getLessons = query(async (category?: string) => {
   "use server";
   const url = category
     ? `http://localhost:3000/api/lessons?category=${category}`
@@ -36,7 +41,48 @@ const getLessons = cache(async (category?: string) => {
   return (await response.json()) as LessonsResponse;
 }, "lessons-data");
 
-const getUserSession = cache(async () => {
+const getProgress = query(async () => {
+  "use server";
+  console.log("[getProgress] Cache function called");
+
+  // Get the session directly instead of making a fetch call
+  const session = await getSession();
+  console.log("[getProgress] Session:", session ? "Found" : "Not found");
+  console.log("[getProgress] User ID:", session?.user?.id);
+
+  if (!session || !session.user) {
+    console.log("[getProgress] No session, returning empty progress");
+    return { success: true, progress: {} } as ProgressResponse;
+  }
+
+  // Import what we need
+  const { getDbFromContext } = await import("~/lib/auth");
+  const { lessonProgress } = await import("~/db/schema");
+  const { eq } = await import("drizzle-orm");
+
+  const db = getDbFromContext();
+
+  // Fetch all progress for this user
+  console.log("[getProgress] Fetching progress for user:", session.user.id);
+  const userProgress = await db.query.lessonProgress.findMany({
+    where: eq(lessonProgress.userId, session.user.id),
+  });
+  console.log("[getProgress] Found progress records:", userProgress.length);
+
+  // Transform into a map for easier lookup by lessonId
+  const progressMap: Record<string, { completed: boolean; score: number | null }> = {};
+  for (const progress of userProgress) {
+    progressMap[progress.lessonId] = {
+      completed: progress.completed,
+      score: progress.score,
+    };
+  }
+  console.log("[getProgress] Progress map:", progressMap);
+
+  return { success: true, progress: progressMap } as ProgressResponse;
+}, "lessons-progress");
+
+const getUserSession = query(async () => {
   "use server";
   return await getSession();
 }, "lessons-user-session");
@@ -44,10 +90,17 @@ const getUserSession = cache(async () => {
 export default function Lessons() {
   const [searchParams, setSearchParams] = useSearchParams();
   const session = createAsync(() => getUserSession());
+  const [isMounted, setIsMounted] = createSignal(false);
 
   const selectedCategory = createMemo(() => searchParams.category as string | undefined);
 
   const lessonsData = createAsync(() => getLessons(selectedCategory()));
+  const progressData = createAsync(() => getProgress());
+
+  // Mark as mounted to avoid hydration mismatch
+  onMount(() => {
+    setIsMounted(true);
+  });
 
   const handleCategoryChange = (category: string | undefined) => {
     if (category) {
@@ -91,10 +144,95 @@ export default function Lessons() {
             style={{
               "font-size": "1.125rem",
               color: "var(--color-text-secondary)",
+              "margin-bottom": "1rem",
             }}
           >
             Learn technical analysis and candlestick patterns through interactive lessons
           </p>
+
+          {/* Progress Summary - Client-only to avoid hydration mismatch */}
+          <Show when={isMounted() && session() && lessonsData() && progressData()}>
+            <div
+              style={{
+                padding: "1rem 1.5rem",
+                "background-color": "var(--color-bg-secondary)",
+                "border-radius": "0.75rem",
+                border: "1px solid var(--color-border)",
+                display: "flex",
+                "align-items": "center",
+                gap: "1.5rem",
+                "margin-top": "1rem",
+              }}
+            >
+              <div style={{ flex: 1 }}>
+                <div
+                  style={{
+                    "font-size": "0.875rem",
+                    color: "var(--color-text-secondary)",
+                    "margin-bottom": "0.5rem",
+                  }}
+                >
+                  Your Progress
+                </div>
+                <div
+                  style={{
+                    "font-size": "1.5rem",
+                    "font-weight": "700",
+                    color: "var(--color-text)",
+                  }}
+                >
+                  {Object.values(progressData()!.progress).filter(p => p.completed).length} / {lessonsData()!.total} Completed
+                </div>
+              </div>
+              <div style={{ flex: 2 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    "align-items": "center",
+                    gap: "1rem",
+                  }}
+                >
+                  <div
+                    style={{
+                      flex: 1,
+                      height: "0.75rem",
+                      "background-color": "var(--color-bg)",
+                      "border-radius": "9999px",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${(() => {
+                          const completed = Object.values(progressData()!.progress).filter(p => p.completed).length;
+                          const total = lessonsData()!.total;
+                          return total > 0 ? Math.round((completed / total) * 100) : 0;
+                        })()}%`,
+                        height: "100%",
+                        "background-color": "var(--color-success)",
+                        transition: "width 0.5s ease",
+                      }}
+                    />
+                  </div>
+                  <div
+                    style={{
+                      "font-size": "1.25rem",
+                      "font-weight": "600",
+                      color: "var(--color-success)",
+                      "min-width": "3rem",
+                      "text-align": "right",
+                    }}
+                  >
+                    {(() => {
+                      const completed = Object.values(progressData()!.progress).filter(p => p.completed).length;
+                      const total = lessonsData()!.total;
+                      return total > 0 ? Math.round((completed / total) * 100) : 0;
+                    })()}%
+                  </div>
+                </div>
+              </div>
+            </div>
+          </Show>
         </div>
 
         {/* Category Filter */}
@@ -269,37 +407,82 @@ export default function Lessons() {
               }}
             >
               <For each={lessonsData()!.lessons}>
-                {(lesson) => (
-                  <A
-                    href={`/lessons/${lesson.slug}`}
-                    style={{
-                      padding: "1.5rem",
-                      "background-color": "var(--color-bg-secondary)",
-                      "border-radius": "0.75rem",
-                      border: "1px solid var(--color-border)",
-                      "text-decoration": "none",
-                      display: "flex",
-                      "flex-direction": "column",
-                      transition: "all 0.2s",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.borderColor = getCategoryColor(lesson.category);
-                      e.currentTarget.style.transform = "translateY(-2px)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.borderColor = "var(--color-border)";
-                      e.currentTarget.style.transform = "translateY(0)";
-                    }}
-                  >
-                    {/* Category & Difficulty */}
-                    <div
+                {(lesson) => {
+                  const progress = () => isMounted() ? progressData()?.progress[lesson.id] : undefined;
+                  const isCompleted = () => isMounted() && (progress()?.completed || false);
+
+                  return (
+                    <A
+                      href={`/lessons/${lesson.slug}`}
                       style={{
+                        padding: "1.5rem",
+                        "background-color": "var(--color-bg-secondary)",
+                        "border-radius": "0.75rem",
+                        border: "1px solid var(--color-border)",
+                        "text-decoration": "none",
                         display: "flex",
-                        "justify-content": "space-between",
-                        "align-items": "center",
-                        "margin-bottom": "1rem",
+                        "flex-direction": "column",
+                        transition: "all 0.2s",
+                        position: "relative",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = getCategoryColor(lesson.category);
+                        e.currentTarget.style.transform = "translateY(-2px)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = "var(--color-border)";
+                        e.currentTarget.style.transform = "translateY(0)";
                       }}
                     >
+                      {/* Completion Badge */}
+                      <Show when={isCompleted()}>
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: "-0.5rem",
+                            right: "-0.5rem",
+                            width: "2rem",
+                            height: "2rem",
+                            "background-color": "var(--color-success)",
+                            "border-radius": "50%",
+                            display: "flex",
+                            "align-items": "center",
+                            "justify-content": "center",
+                            border: "3px solid var(--color-bg)",
+                            "box-shadow": "0 2px 8px rgba(0, 0, 0, 0.15)",
+                          }}
+                          title={`Completed with ${progress()?.score}%`}
+                        >
+                          <svg
+                            style={{
+                              width: "1rem",
+                              height: "1rem",
+                              color: "white",
+                            }}
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                            xmlns="http://www.w3.org/2000/svg"
+                          >
+                            <path
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                              stroke-width="3"
+                              d="M5 13l4 4L19 7"
+                            />
+                          </svg>
+                        </div>
+                      </Show>
+
+                      {/* Category & Difficulty */}
+                      <div
+                        style={{
+                          display: "flex",
+                          "justify-content": "space-between",
+                          "align-items": "center",
+                          "margin-bottom": "1rem",
+                        }}
+                      >
                       <span
                         style={{
                           "font-size": "0.75rem",
@@ -389,7 +572,8 @@ export default function Lessons() {
                       </span>
                     </div>
                   </A>
-                )}
+                  );
+                }}
               </For>
             </div>
           </Show>

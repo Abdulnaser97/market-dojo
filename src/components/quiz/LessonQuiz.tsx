@@ -1,5 +1,5 @@
 import { createSignal, For, Show } from "solid-js";
-import type { LessonQuiz, QuizQuestion } from "~/db/quiz-data";
+import type { LessonQuiz } from "~/db/quiz-data";
 
 interface LessonQuizProps {
   quiz: LessonQuiz;
@@ -19,11 +19,6 @@ export default function LessonQuiz(props: LessonQuizProps) {
   const totalQuestions = () => props.quiz.questions.length;
   const isAnswerCorrect = () => selectedAnswer() === currentQuestion().correctAnswer;
 
-  const handleAnswerSelect = (index: number) => {
-    if (showExplanation()) return; // Don't allow changing after submission
-    setSelectedAnswer(index);
-  };
-
   const handleSubmitAnswer = () => {
     if (selectedAnswer() === null) return;
 
@@ -34,10 +29,18 @@ export default function LessonQuiz(props: LessonQuizProps) {
   const handleNextQuestion = () => {
     if (isLastQuestion()) {
       // Quiz complete
-      const correctCount = userAnswers().filter(
+      const allAnswers = userAnswers();
+      const correctCount = allAnswers.filter(
         (answer, idx) => answer === props.quiz.questions[idx].correctAnswer
       ).length;
       const score = Math.round((correctCount / totalQuestions()) * 100);
+
+      console.log("[LessonQuiz] Quiz complete!");
+      console.log("[LessonQuiz] User answers:", allAnswers);
+      console.log("[LessonQuiz] Correct count:", correctCount);
+      console.log("[LessonQuiz] Total questions:", totalQuestions());
+      console.log("[LessonQuiz] Final score:", score);
+      console.log("[LessonQuiz] Calling onComplete callback...");
 
       setQuizComplete(true);
       props.onComplete?.(score);
