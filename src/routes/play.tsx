@@ -3,11 +3,22 @@ import { CandlestickData } from "lightweight-charts";
 import { createSignal, onMount } from "solid-js";
 import Nav from "~/components/layout/Nav";
 import ChartView from "~/components/game/ChartView";
+import GameHUD from "~/components/game/GameHUD";
+import QuizDialog from "~/components/game/QuizDialog";
+import SessionSummary from "~/components/game/SessionSummary";
 
 export default function Play() {
   const [chartData, setChartData] = createSignal<CandlestickData[]>([]);
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);
+
+  // Demo state for UI components (Phase 4.3 - non-functional)
+  const [showQuizDemo, setShowQuizDemo] = createSignal(false);
+  const [showSummaryDemo, setShowSummaryDemo] = createSignal(false);
+  const [demoScore, setDemoScore] = createSignal(1250);
+  const [demoStreak, setDemoStreak] = createSignal(5);
+  const [demoSpeed, setDemoSpeed] = createSignal(1);
+  const [demoPaused, setDemoPaused] = createSignal(false);
 
   onMount(async () => {
     try {
@@ -52,20 +63,17 @@ export default function Play() {
           </p>
         </div>
 
+        {/* Game Container with HUD and Chart */}
         <div
           style={{
             "background-color": "var(--color-bg-secondary)",
             "border-radius": "0.75rem",
             border: "1px solid var(--color-border)",
-            padding: "1.5rem",
-            "min-height": "600px",
-            display: "flex",
-            "align-items": "center",
-            "justify-content": "center",
+            overflow: "hidden",
           }}
         >
           {loading() ? (
-            <div style={{ "text-align": "center" }}>
+            <div style={{ "text-align": "center", padding: "3rem" }}>
               <div
                 style={{
                   width: "3rem",
@@ -80,7 +88,7 @@ export default function Play() {
               <p style={{ color: "var(--color-text-secondary)" }}>Loading chart data...</p>
             </div>
           ) : error() ? (
-            <div style={{ "text-align": "center" }}>
+            <div style={{ "text-align": "center", padding: "3rem" }}>
               <div
                 style={{
                   width: "3rem",
@@ -98,15 +106,103 @@ export default function Play() {
               <p style={{ color: "var(--color-danger)", "font-weight": "600" }}>{error()}</p>
             </div>
           ) : (
-            <ChartView data={chartData()} height={600} />
+            <>
+              {/* Game HUD - Horizontal bar at top */}
+              <div style={{ padding: "1.5rem 1.5rem 0 1.5rem" }}>
+                <GameHUD
+                  score={demoScore()}
+                  streak={demoStreak()}
+                  timer="05:32"
+                  speed={demoSpeed()}
+                  isPaused={demoPaused()}
+                  onSpeedChange={(speed) => setDemoSpeed(speed)}
+                  onPauseToggle={() => setDemoPaused(!demoPaused())}
+                />
+              </div>
+              {/* Chart below HUD */}
+              <div style={{ padding: "1.5rem" }}>
+                <ChartView data={chartData()} height={600} />
+              </div>
+            </>
           )}
         </div>
 
-        <div style={{ "margin-top": "1rem", "text-align": "center" }}>
-          <p style={{ "font-size": "0.875rem", color: "var(--color-text-secondary)" }}>
-            Phase 4.1: Chart with real historical data from database
+        {/* Demo Controls - Phase 4.3 UI Shell */}
+        <div style={{ "margin-top": "1.5rem", "text-align": "center" }}>
+          <p
+            style={{
+              "font-size": "0.875rem",
+              color: "var(--color-text-secondary)",
+              "margin-bottom": "1rem",
+            }}
+          >
+            Phase 4.3: UI Shell Demo (non-functional components)
           </p>
+          <div style={{ display: "flex", gap: "1rem", "justify-content": "center", "flex-wrap": "wrap" }}>
+            <button
+              onClick={() => setShowQuizDemo(!showQuizDemo())}
+              style={{
+                padding: "0.75rem 1.5rem",
+                "border-radius": "0.5rem",
+                border: "2px solid var(--color-primary)",
+                "background-color": showQuizDemo()
+                  ? "var(--color-primary)"
+                  : "var(--color-bg-secondary)",
+                color: showQuizDemo() ? "white" : "var(--color-primary)",
+                "font-weight": "600",
+                cursor: "pointer",
+                transition: "all 0.2s",
+              }}
+            >
+              {showQuizDemo() ? "Hide" : "Show"} Quiz Dialog
+            </button>
+            <button
+              onClick={() => setShowSummaryDemo(!showSummaryDemo())}
+              style={{
+                padding: "0.75rem 1.5rem",
+                "border-radius": "0.5rem",
+                border: "2px solid var(--color-primary)",
+                "background-color": showSummaryDemo()
+                  ? "var(--color-primary)"
+                  : "var(--color-bg-secondary)",
+                color: showSummaryDemo() ? "white" : "var(--color-primary)",
+                "font-weight": "600",
+                cursor: "pointer",
+                transition: "all 0.2s",
+              }}
+            >
+              {showSummaryDemo() ? "Hide" : "Show"} Session Summary
+            </button>
+          </div>
         </div>
+
+        {/* Quiz Dialog Component */}
+        <QuizDialog
+          isOpen={showQuizDemo()}
+          question="What candlestick pattern is forming here?"
+          options={[
+            { label: "A", value: "Doji" },
+            { label: "B", value: "Hammer" },
+            { label: "C", value: "Bullish Engulfing" },
+            { label: "D", value: "Shooting Star" },
+          ]}
+          timeRemaining={12}
+          totalTime={15}
+          onSelectAnswer={(answer) => console.log("Selected:", answer)}
+          onClose={() => setShowQuizDemo(false)}
+        />
+
+        {/* Session Summary Component */}
+        <SessionSummary
+          isOpen={showSummaryDemo()}
+          finalScore={demoScore()}
+          totalQuestions={12}
+          correctAnswers={9}
+          onPlayAgain={() => {
+            setShowSummaryDemo(false);
+            console.log("Play Again clicked");
+          }}
+        />
       </div>
 
       <style>{`
