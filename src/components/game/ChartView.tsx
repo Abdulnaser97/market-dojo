@@ -119,12 +119,8 @@ export default function ChartView(props: ChartViewProps) {
   // Update data when props change - following Lightweight Charts realtime pattern
   createEffect(() => {
     const series = candlestickSeries();
-    console.log("[ChartView] createEffect fired, data length:", props.data.length);
-    console.log("[ChartView] candlestickSeries exists?", !!series);
-    console.log("[ChartView] lastUpdateTime:", lastUpdateTime);
 
     if (!series) {
-      console.log("[ChartView] No candlestickSeries, skipping update");
       return;
     }
 
@@ -134,41 +130,30 @@ export default function ChartView(props: ChartViewProps) {
     if (dataLength === 0) {
       series.setData([]);
       lastUpdateTime = -1; // Sentinel: cleared and ready for updates
-      console.log("[ChartView] Chart cleared, ready for updates");
       return;
     }
 
     const lastCandle = props.data[dataLength - 1];
     const candleTime = lastCandle.time as number;
-    console.log("[ChartView] Last candle:", lastCandle);
 
     // After clearing (lastUpdateTime === -1), start using update()
     if (lastUpdateTime === -1) {
-      console.log("[ChartView] Calling update() for first candle after clear");
       series.update(lastCandle);
       lastUpdateTime = candleTime;
-      console.log("[ChartView] First update after clear, time:", candleTime);
     }
     // If this is a new candle (different timestamp), use update() for realtime addition
     else if (lastUpdateTime !== null && candleTime !== lastUpdateTime) {
-      console.log("[ChartView] Calling update() for new candle");
       series.update(lastCandle);
       lastUpdateTime = candleTime;
-      console.log("[ChartView] Realtime update - new candle at time:", candleTime);
     }
     // Initial data load
     else if (lastUpdateTime === null) {
-      console.log("[ChartView] Calling setData() for initial load");
       series.setData(props.data);
       lastUpdateTime = candleTime;
       const currentChart = chart();
       if (currentChart) {
         currentChart.timeScale().fitContent();
       }
-      console.log("[ChartView] Full data load -", dataLength, "candles");
-    }
-    else {
-      console.log("[ChartView] No action taken - same timestamp?");
     }
   });
 
@@ -179,8 +164,6 @@ export default function ChartView(props: ChartViewProps) {
 
     const patternIndices = props.highlightPattern?.candleIndices || [];
     const isActive = props.showHighlight;
-
-    console.log("[ChartView] Dimming effect - active:", isActive, "pattern indices:", patternIndices);
 
     if (isActive && patternIndices.length > 0) {
       // Apply dimmed colors to all candles except pattern candles
@@ -204,7 +187,6 @@ export default function ChartView(props: ChartViewProps) {
       });
 
       series.setData(updatedData);
-      console.log("[ChartView] Applied dimmed colors, pattern candles:", patternIndices);
     } else {
       // Quiz inactive: restore original colors by removing custom color properties
       const restoredData = props.data.map((candle) => {
@@ -213,7 +195,6 @@ export default function ChartView(props: ChartViewProps) {
       });
 
       series.setData(restoredData);
-      console.log("[ChartView] Restored original colors");
     }
   });
 

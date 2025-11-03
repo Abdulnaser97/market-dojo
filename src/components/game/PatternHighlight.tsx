@@ -26,14 +26,6 @@ export default function PatternHighlight(props: PatternHighlightProps) {
 
   // Calculate highlight position when pattern or chart changes
   createEffect(() => {
-    console.log("[PatternHighlight] Effect triggered:", {
-      isActive: props.isActive,
-      hasPattern: !!props.pattern,
-      hasChart: !!props.chart,
-      hasSeries: !!props.series,
-      hasContainer: !!props.chartContainer,
-    });
-
     if (!props.isActive || !props.pattern || !props.chart || !props.series || !props.chartContainer) {
       setHighlightBox(null);
       return;
@@ -118,17 +110,6 @@ export default function PatternHighlight(props: PatternHighlightProps) {
         top: topY - basePadding,
         width: boxWidth,
         height: Math.max(bottomY - topY, 50) + basePadding * 2,
-      });
-
-      console.log("[PatternHighlight] Highlight box:", {
-        chartWidth,
-        originalLeft: leftX - basePadding,
-        clampedLeft: boxLeft,
-        originalWidth: Math.max(rightX - leftX + candleWidth, 50) + basePadding * 2,
-        clampedWidth: boxWidth,
-        patternIndices: candleIndices,
-        timeRange: [minTime, maxTime],
-        priceRange: [minPrice, maxPrice],
       });
     } catch (error) {
       console.error("[PatternHighlight] Error calculating highlight position:", error);

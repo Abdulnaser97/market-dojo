@@ -93,7 +93,6 @@ export default function Play() {
     const handleKeyPress = (e: KeyboardEvent) => {
       if (e.shiftKey && e.key === 'D') {
         setDebugMode(!debugMode());
-        console.log("[Play] Debug mode:", !debugMode() ? "ENABLED" : "DISABLED");
       }
     };
     window.addEventListener("keydown", handleKeyPress);
@@ -262,7 +261,6 @@ export default function Play() {
 
     // Skip timer in debug mode
     if (debugMode()) {
-      console.log("[Play] Debug mode active - quiz timer paused");
       return;
     }
 

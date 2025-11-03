@@ -72,12 +72,15 @@ export default function QuizDialog(props: QuizDialogProps) {
         <div
           style={{
             "background-color": "#1a1a1d", // Solid dark background
-            border: "3px solid #6366f1", // Indigo border to match highlight
+            border: "1px solid #3a3a3d", // Subtle gray border
             "border-radius": "0.75rem",
             width: "450px",
             "max-width": "100%",
             padding: "2rem",
-            "box-shadow": "0 0 40px rgba(99, 102, 241, 0.4), 0 25px 50px -12px rgba(0, 0, 0, 0.5)",
+            "box-shadow":
+              "inset 0 1px 0 rgba(255, 255, 255, 0.1), " + // Top highlight (bezel light)
+              "inset 0 -1px 0 rgba(0, 0, 0, 0.3), " + // Bottom shadow (bezel depth)
+              "0 25px 50px -12px rgba(0, 0, 0, 0.6)", // Outer shadow for depth
             "max-height": "calc(100vh - 4rem)",
             overflow: "auto",
             "pointer-events": "auto", // Re-enable pointer events for the dialog itself
