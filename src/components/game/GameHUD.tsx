@@ -23,7 +23,7 @@ export default function GameHUD(props: GameHUDProps) {
   const isPaused = () => props.isPaused ?? false;
   const hasStarted = () => props.hasStarted ?? false;
 
-  const speedOptions = [1, 2, 5, 10];
+  const speedOptions = [0.25, 0.5, 1, 2, 5, 10];
 
   // Determine button state and action
   const getButtonConfig = () => {
@@ -138,53 +138,68 @@ export default function GameHUD(props: GameHUDProps) {
       {/* Controls Section - Horizontal Layout */}
       <div style={{ display: "flex", gap: "1rem", "align-items": "center" }}>
         {/* Speed Controls */}
-        <div style={{ display: "flex", gap: "0.5rem", "align-items": "center" }}>
+        <div style={{ display: "flex", "align-items": "center" }}>
           <span
             style={{
               "font-size": "0.75rem",
               color: "var(--color-text-secondary)",
               "text-transform": "uppercase",
               "letter-spacing": "0.05em",
-              "margin-right": "0.25rem",
+              "margin-right": "0.5rem",
             }}
           >
             Speed
           </span>
-          {speedOptions.map((speedOption) => (
-            <button
-              onClick={() => props.onSpeedChange?.(speedOption)}
-              style={{
-                padding: "0.5rem 0.75rem",
-                "border-radius": "0.25rem",
-                border: "1px solid var(--color-border)",
-                "background-color":
-                  speed() === speedOption
-                    ? "var(--color-primary)"
-                    : "var(--color-bg-primary)",
-                color:
-                  speed() === speedOption
-                    ? "white"
-                    : "var(--color-text-primary)",
-                "font-weight": "600",
-                "font-size": "0.875rem",
-                cursor: "pointer",
-                transition: "all 0.2s",
-                "min-width": "3rem",
-              }}
-              onMouseEnter={(e) => {
-                if (speed() !== speedOption) {
-                  e.currentTarget.style.backgroundColor = "var(--color-bg-secondary)";
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (speed() !== speedOption) {
-                  e.currentTarget.style.backgroundColor = "var(--color-bg-primary)";
-                }
-              }}
-            >
-              {speedOption}x
-            </button>
-          ))}
+          {/* Button bar - connected buttons */}
+          <div style={{ display: "flex" }}>
+            {speedOptions.map((speedOption, index) => {
+              const isFirst = index === 0;
+              const isLast = index === speedOptions.length - 1;
+
+              return (
+                <button
+                  onClick={() => props.onSpeedChange?.(speedOption)}
+                  style={{
+                    padding: "0.5rem 0.75rem",
+                    "border-radius": isFirst
+                      ? "0.25rem 0 0 0.25rem"
+                      : isLast
+                        ? "0 0.25rem 0.25rem 0"
+                        : "0",
+                    border: "1px solid var(--color-border)",
+                    "margin-left": isFirst ? "0" : "-1px",
+                    "background-color":
+                      speed() === speedOption
+                        ? "var(--color-primary)"
+                        : "var(--color-bg-primary)",
+                    color:
+                      speed() === speedOption
+                        ? "white"
+                        : "var(--color-text-primary)",
+                    "font-weight": "600",
+                    "font-size": "0.875rem",
+                    cursor: "pointer",
+                    transition: "all 0.2s",
+                    "min-width": "3rem",
+                    position: "relative",
+                    "z-index": speed() === speedOption ? "1" : "0",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (speed() !== speedOption) {
+                      e.currentTarget.style.backgroundColor = "var(--color-bg-secondary)";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (speed() !== speedOption) {
+                      e.currentTarget.style.backgroundColor = "var(--color-bg-primary)";
+                    }
+                  }}
+                >
+                  {speedOption}x
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Start/Pause/Resume Button */}

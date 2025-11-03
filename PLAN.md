@@ -598,7 +598,44 @@ This document outlines a phased approach to building MarketDojo from scratch.
 
 **Goal**: Full-featured simulated broker with order types, P/L tracking, and risk management
 
-### Tasks
+### Timeframe Enhancement (Mid-Term)
+
+**Goal**: Add timeframe flexibility to match real trading platforms
+
+**Tasks**:
+1. **Timeframe Selector**
+   - Add timeframe selector to game settings/controls
+   - Options: 15m, 30m, 1h (default), 4h
+   - Update market data API to support multiple timeframes
+   - Fetch and cache data for each timeframe in KV
+
+2. **Historical Data Expansion**
+   - Seed database with multiple timeframe datasets:
+     - 15-minute candles (last 7 days)
+     - 30-minute candles (last 14 days)
+     - 1-hour candles (last 30 days) - existing
+     - 4-hour candles (last 90 days)
+   - Create migration script to populate data
+   - Optimize storage (consider compression)
+
+3. **Pattern Detection Calibration**
+   - Test pattern detection accuracy across timeframes
+   - Adjust confidence thresholds per timeframe if needed
+   - Document which patterns work best on which timeframes
+
+4. **UI Updates**
+   - Add timeframe selector to `/play` route
+   - Show selected timeframe in HUD
+   - Update chart axis labels based on timeframe
+   - Persist user's preferred timeframe in settings
+
+**Deliverables**:
+- ✅ Users can select from 4 timeframes (15m, 30m, 1h, 4h)
+- ✅ Chart updates correctly when timeframe changes
+- ✅ Pattern detection works across all timeframes
+- ✅ User preference persists across sessions
+
+### Trading Tasks
 
 1. **Trade Engine Architecture**
    - Create `TradeEngine` class (in worker):
@@ -811,6 +848,122 @@ These features can be added after core functionality is stable and deployed.
 - Commission/fee modeling
 - Options trading simulation
 - Backtesting framework (test strategy against historical data)
+
+### Progressive Timeframe Mastery (Difficulty by Speed)
+
+**Goal**: Create a natural learning progression where users master slower timeframes before advancing to faster, real-world day-trading speeds.
+
+**Current State**: All users access the same 1h timeframe regardless of skill level. Beginners can feel overwhelmed by the pace, while experts may find it unchallenging.
+
+**Enhancement Vision**: Progressive unlocking system where timeframe access is tied to mastery, simulating the real trader's journey from swing trading to scalping.
+
+#### Implementation Strategy
+
+1. **Timeframe Difficulty Tiers**
+   - **Beginner Tier** (unlocked immediately):
+     - 4h timeframe - Slowest pace, clearest patterns
+     - Daily (1d) timeframe - Very slow, learning-focused
+   - **Intermediate Tier** (unlock at 80% avg mastery):
+     - 1h timeframe - Moderate speed (current default)
+     - 30m timeframe - Faster decisions required
+   - **Advanced Tier** (unlock at 85% avg mastery):
+     - 15m timeframe - Day-trading speed
+     - 5m timeframe - Active scalping pace
+   - **Expert Tier** (unlock at 90% avg mastery):
+     - 1m timeframe - Rapid-fire decisions
+     - "Challenge Mode" - Mixed timeframes in one session
+
+2. **Scoring Multipliers by Timeframe**
+   - Reward users for mastering faster timeframes:
+     ```
+     4h/1d:  1.0x score multiplier (learning mode)
+     1h/30m: 1.5x score multiplier
+     15m/5m: 2.0x score multiplier
+     1m:     3.0x score multiplier (expert only)
+     ```
+   - Display potential multiplier before starting session
+   - Show "You could earn 2x points on 15m charts!" to encourage progression
+
+3. **Unlock Notifications & Achievements**
+   - Celebrate unlocks with modal notifications:
+     - "Congratulations! You've unlocked 1-hour charts! 🎉"
+     - "Your pattern recognition is now fast enough for day trading!"
+   - Achievement badges:
+     - "Swing Trader" (4h mastery)
+     - "Position Trader" (1h mastery)
+     - "Day Trader" (15m mastery)
+     - "Scalper" (1m mastery)
+   - Display badges on profile and leaderboard
+
+4. **Practice Mode vs Challenge Mode**
+   - **Practice Mode** (any unlocked timeframe):
+     - No time limit on quizzes
+     - Can pause/replay
+     - Full score multipliers
+   - **Challenge Mode** (unlocked at intermediate):
+     - Strict time limits
+     - Cannot pause
+     - 1.5x bonus multiplier on top of timeframe multiplier
+     - Leaderboard eligible
+
+5. **Database Schema Updates**
+   ```sql
+   -- Track timeframe unlocks
+   CREATE TABLE timeframe_progress (
+     user_id INTEGER NOT NULL,
+     timeframe TEXT NOT NULL, -- '1m', '5m', '15m', '30m', '1h', '4h', '1d'
+     unlocked_at INTEGER,
+     mastery_score REAL DEFAULT 0, -- 0-100
+     total_sessions INTEGER DEFAULT 0,
+     best_score INTEGER DEFAULT 0,
+     PRIMARY KEY (user_id, timeframe),
+     FOREIGN KEY (user_id) REFERENCES users(id)
+   );
+
+   -- Track unlock eligibility
+   ALTER TABLE users ADD COLUMN timeframe_tier TEXT DEFAULT 'beginner';
+   ```
+
+6. **Adaptive Recommendations**
+   - After each session, analyze performance:
+     ```typescript
+     if (avgAccuracy > 80 && currentTier === 'beginner') {
+       showUnlockPrompt('You\'re ready for faster timeframes!');
+       unlockTier('intermediate');
+     }
+     ```
+   - Suggest practicing on slower timeframes if struggling:
+     ```typescript
+     if (recentAccuracy < 60 && currentTimeframe !== '4h') {
+       suggest('Try practicing on 4h charts to build confidence');
+     }
+     ```
+
+7. **Leaderboard Segmentation**
+   - Separate leaderboards per timeframe tier
+   - "Top 1m Scalpers" vs "Top 4h Swing Traders"
+   - Prevents beginners from competing against experts unfairly
+   - Shows users where they rank in their skill bracket
+
+#### Benefits
+
+- **Pedagogically Sound**: Mirrors real trading progression (learn on slow charts, advance to fast)
+- **Prevents Frustration**: Beginners aren't thrown into 1m scalping
+- **Gamification**: Clear progression path with tangible rewards
+- **Engagement**: Always a "next level" to unlock
+- **Skill Validation**: Higher multipliers validate mastery
+- **Realistic Training**: Prepares users for actual day-trading time pressure
+
+#### Risks & Mitigations
+
+| Risk | Mitigation |
+|------|------------|
+| Users feel locked out of features | Unlock thresholds are achievable (80-85%), show progress bars |
+| Expert users forced through beginner tier | Allow "placement quiz" to skip tiers if 90%+ accuracy |
+| Timeframe availability delays engagement | Make unlocks feel rewarding, not like gating content |
+| Multipliers create leaderboard imbalance | Separate leaderboards per tier |
+
+---
 
 ### Adaptive Pattern Training (Proficiency-Based Chart Generation)
 
