@@ -6,10 +6,32 @@ import ChartView from "~/components/game/ChartView";
 import GameHUD from "~/components/game/GameHUD";
 import QuizDialog from "~/components/game/QuizDialog";
 import SessionSummary from "~/components/game/SessionSummary";
-import type { WorkerMessage, MainThreadMessage, QuizData } from "~/game/simulator.worker";
+import type { WorkerMessage, MainThreadMessage, QuizData, ScoreUpdate } from "~/game/simulator.worker";
 import type { Pattern } from "~/game/PatternService";
 // @ts-ignore - Vite handles worker imports
 import SimulatorWorker from "~/game/simulator.worker?worker";
+
+// API Response types
+interface MarketDataResponse {
+  success: boolean;
+  data?: CandlestickData[];
+  cached?: boolean;
+  error?: string;
+}
+
+interface SessionStartResponse {
+  success: boolean;
+  sessionId?: string;
+  createdAt?: string;
+  error?: string;
+}
+
+interface SessionSubmitResponse {
+  success: boolean;
+  sessionId?: string;
+  mastery?: any[];
+  error?: string;
+}
 
 export default function Play() {
   // Data loading state
@@ -28,10 +50,15 @@ export default function Play() {
   // Number of initial candles to show for context
   const INITIAL_CANDLES = 50;
 
-  // Game state (Phase 4.3 demo values, will be real in Phase 4.6)
+  // Game state
   const [score, setScore] = createSignal(0);
   const [streak, setStreak] = createSignal(0);
   const [elapsedSeconds, setElapsedSeconds] = createSignal(0);
+
+  // Session tracking
+  const [sessionId, setSessionId] = createSignal<string | null>(null);
+  const [_sessionStartTime, setSessionStartTime] = createSignal<Date | null>(null);
+  const [sessionCompleteData, setSessionCompleteData] = createSignal<any>(null);
 
   // Quiz state
   const [currentQuiz, setCurrentQuiz] = createSignal<QuizData | null>(null);
@@ -64,11 +91,11 @@ export default function Play() {
       console.log("[Play] Fetching market data...");
 
       const response = await fetch("/api/market-data?symbol=BTC/USD&timeframe=1h&limit=1000");
-      const result = await response.json();
+      const result = await response.json() as MarketDataResponse;
 
       console.log("[Play] API response:", result);
 
-      if (result.success) {
+      if (result.success && result.data) {
         setFullData(result.data);
         console.log(`[Play] Loaded ${result.data.length} candlesticks (cached: ${result.cached})`);
 
@@ -145,10 +172,13 @@ export default function Play() {
           break;
 
         case "COMPLETE":
-          console.log("[Play] Simulation complete");
+          console.log("[Play] Simulation complete", payload);
           setIsPlaying(false);
           setIsPaused(false);
           stopTimer();
+
+          // Submit session results
+          handleSessionComplete(payload);
           break;
 
         case "QUIZ_EVENT":
@@ -158,6 +188,13 @@ export default function Play() {
           setSelectedAnswer(null);
           setShowExplanation(false);
           startQuizTimer();
+          break;
+
+        case "SCORE_UPDATE":
+          console.log("[Play] Score update received:", payload);
+          const scoreUpdate = payload as ScoreUpdate;
+          setScore(scoreUpdate.score);
+          setStreak(scoreUpdate.streak);
           break;
 
         case "ERROR":
@@ -178,7 +215,7 @@ export default function Play() {
   /**
    * Start the simulation
    */
-  function startSimulation() {
+  async function startSimulation() {
     if (!worker) return;
 
     console.log("[Play] Starting simulation");
@@ -190,10 +227,124 @@ export default function Play() {
     setIsPaused(false);
     setHasStarted(true);
 
+    // Initialize session in database
+    try {
+      const response = await fetch("/api/session/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const result = await response.json() as SessionStartResponse;
+
+      if (result.success && result.sessionId && result.createdAt) {
+        setSessionId(result.sessionId);
+        setSessionStartTime(new Date(result.createdAt));
+        console.log("[Play] Session started:", result.sessionId);
+      } else {
+        console.error("[Play] Failed to start session:", result.error);
+      }
+    } catch (error) {
+      console.error("[Play] Error starting session:", error);
+    }
+
     const message: WorkerMessage = { type: "START" };
     worker.postMessage(message);
 
     startTimer();
+  }
+
+  /**
+   * Handle session completion - submit results to API
+   */
+  async function handleSessionComplete(payload: any) {
+    const currentSessionId = sessionId();
+
+    if (!currentSessionId) {
+      console.warn("[Play] No session ID, skipping submission");
+      setShowSummaryDemo(true); // Still show summary
+      return;
+    }
+
+    const duration = elapsedSeconds();
+    const { score, accuracy, maxStreak, patternAttempts } = payload;
+
+    // Transform pattern attempts for API
+    const patternResults = patternAttempts.map((attempt: any) => ({
+      patternName: attempt.patternName,
+      correct: attempt.correct,
+      timeTaken: attempt.timeTaken,
+    }));
+
+    console.log("[Play] Submitting session results...");
+    console.log("[Play] Session ID:", currentSessionId);
+    console.log("[Play] Score:", score);
+    console.log("[Play] Accuracy:", accuracy);
+    console.log("[Play] Max Streak:", maxStreak);
+    console.log("[Play] Duration:", duration, "seconds");
+    console.log("[Play] Patterns tested:", patternResults.length);
+
+    try {
+      const response = await fetch("/api/session/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: currentSessionId,
+          score,
+          accuracy,
+          duration,
+          maxStreak,
+          patternResults,
+        }),
+      });
+
+      const result = await response.json() as SessionSubmitResponse;
+
+      if (result.success) {
+        console.log("[Play] Session submitted successfully");
+        console.log("[Play] Updated mastery:", result.mastery);
+
+        // Store session data for summary
+        setSessionCompleteData({
+          score,
+          accuracy,
+          correctCount: payload.correctCount,
+          totalQuestions: patternResults.length,
+          duration,
+          maxStreak,
+          patternResults,
+        });
+
+        // Show session summary with results
+        setShowSummaryDemo(true);
+      } else {
+        console.error("[Play] Failed to submit session:", result.error);
+
+        // Still store and show summary
+        setSessionCompleteData({
+          score,
+          accuracy,
+          correctCount: payload.correctCount,
+          totalQuestions: patternResults.length,
+          duration,
+          maxStreak,
+          patternResults,
+        });
+        setShowSummaryDemo(true);
+      }
+    } catch (error) {
+      console.error("[Play] Error submitting session:", error);
+
+      // Still store and show summary
+      setSessionCompleteData({
+        score,
+        accuracy,
+        correctCount: payload.correctCount,
+        totalQuestions: patternResults.length,
+        duration,
+        maxStreak,
+        patternResults,
+      });
+      setShowSummaryDemo(true);
+    }
   }
 
   /**
@@ -292,10 +443,12 @@ export default function Play() {
   function handleQuizTimeout() {
     stopQuizTimer();
     setShowExplanation(true);
-    // Auto-close quiz after showing explanation
+
+    // Auto-close quiz after showing explanation (5 seconds for reading)
     setTimeout(() => {
-      closeQuiz();
-    }, 3000);
+      // Send empty answer to worker when closing (counts as incorrect)
+      closeQuiz("");
+    }, 5000);
   }
 
   /**
@@ -308,36 +461,55 @@ export default function Play() {
     setSelectedAnswer(answer);
     setShowExplanation(true);
 
-    // Check if correct
-    const quiz = currentQuiz();
-    if (quiz && answer === quiz.correctAnswer) {
-      console.log("[Play] Correct answer!");
-      // TODO: Update score and streak in Phase 4.6
-    } else {
-      console.log("[Play] Incorrect answer!");
-      // TODO: Reset streak in Phase 4.6
-    }
-
-    // Auto-close quiz after 3 seconds
+    // Auto-close quiz after 5 seconds (give time to read explanation)
     setTimeout(() => {
-      closeQuiz();
-    }, 3000);
+      closeQuiz(answer);
+    }, 5000);
   }
 
   /**
-   * Close the quiz dialog
+   * Close the quiz dialog and submit answer to worker
    */
-  function closeQuiz() {
+  function closeQuiz(answer?: string) {
     stopQuizTimer();
     setCurrentQuiz(null);
     setSelectedAnswer(null);
     setShowExplanation(false);
 
-    // Tell worker that answer was submitted
-    if (worker) {
-      const message: WorkerMessage = { type: "SUBMIT_ANSWER" };
+    // Send answer to worker for scoring and resume simulation
+    if (worker && answer !== undefined) {
+      const message: WorkerMessage = {
+        type: "SUBMIT_ANSWER",
+        payload: { answer }
+      };
       worker.postMessage(message);
     }
+  }
+
+  /**
+   * Transform pattern results into PatternStats format for summary
+   */
+  function getPatternStats() {
+    const data = sessionCompleteData();
+    if (!data || !data.patternResults) return undefined;
+
+    // Group by pattern name and count correct/total
+    const patternMap = new Map<string, { correct: number; total: number }>();
+
+    for (const result of data.patternResults) {
+      const existing = patternMap.get(result.patternName) || { correct: 0, total: 0 };
+      patternMap.set(result.patternName, {
+        correct: existing.correct + (result.correct ? 1 : 0),
+        total: existing.total + 1,
+      });
+    }
+
+    // Convert to array format
+    return Array.from(patternMap.entries()).map(([name, stats]) => ({
+      name,
+      correct: stats.correct,
+      total: stats.total,
+    }));
   }
 
   /**
@@ -357,11 +529,10 @@ export default function Play() {
 
     const demoPattern: Pattern = {
       name: "Morning Star",
-      type: "three-candle",
+      type: "reversal",
       candleIndices: patternIndices,
       confidence: 85,
       sentiment: "bullish",
-      description: "A three-candle reversal pattern indicating a potential bullish reversal",
     };
 
     const demoQuiz: QuizData = {
@@ -605,9 +776,10 @@ export default function Play() {
         {/* Session Summary Component */}
         <SessionSummary
           isOpen={showSummaryDemo()}
-          finalScore={score()}
-          totalQuestions={12}
-          correctAnswers={9}
+          finalScore={sessionCompleteData()?.score ?? score()}
+          totalQuestions={sessionCompleteData()?.totalQuestions ?? 0}
+          correctAnswers={sessionCompleteData()?.correctCount ?? 0}
+          patternsTesteed={getPatternStats()}
           duration={formattedTime()}
           onPlayAgain={() => {
             setShowSummaryDemo(false);

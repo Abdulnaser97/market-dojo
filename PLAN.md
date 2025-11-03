@@ -577,6 +577,200 @@ This document outlines a phased approach to building MarketDojo from scratch.
 
 ---
 
+### Phase 4.7: History & Statistics Pages
+
+**Goal**: Provide comprehensive analytics and historical tracking for both play sessions and learning progress
+
+**What it does**: Creates a history dashboard where users can review their performance over time, identify strengths and weaknesses, and track improvement across all game modes.
+
+**Tasks**:
+
+1. **Create `/history` - Unified Stats Overview**
+   - High-level dashboard combining play and learning stats
+   - Components:
+     - **Overall Stats Card**:
+       - Total sessions played (game + lessons)
+       - Total time spent learning
+       - Overall accuracy across all activities
+       - Current streak (consecutive days active)
+     - **Activity Timeline**:
+       - Calendar heatmap showing activity over last 90 days
+       - Color intensity = sessions per day
+       - Tooltips show daily breakdown
+     - **Quick Stats Grid**:
+       - Play Sessions: Total count, avg score, best score
+       - Lessons: Completed count, avg quiz score, mastery level
+       - Patterns: Total patterns learned, avg mastery across all patterns
+     - **Navigation Cards**:
+       - "Play History" → `/history/play`
+       - "Learning History" → `/history/learn`
+   - Layout: Clean, card-based dashboard with charts
+   - Update nav bar to include "History" link
+
+2. **Create `/history/play` - Play Session Analytics**
+   - Detailed stats for pattern recognition game sessions
+   - Components:
+     - **Performance Overview**:
+       - Total play sessions
+       - Average score, best score, total points earned
+       - Average accuracy, best accuracy
+       - Total patterns tested
+       - Average session duration
+     - **Progress Charts**:
+       - **Score Over Time**: Line chart showing score progression (last 30 sessions)
+       - **Accuracy Trend**: Line chart showing accuracy % over time
+       - **Sessions Per Day**: Bar chart showing play frequency (last 30 days)
+     - **Pattern Mastery Heatmap**:
+       - Grid layout showing all 16 patterns
+       - Color-coded by accuracy (red = low, yellow = medium, green = high)
+       - Each cell shows:
+         - Pattern name
+         - Accuracy percentage
+         - Number of attempts
+         - Weight (adaptive difficulty indicator)
+       - Hover tooltip with detailed breakdown
+       - Click pattern to filter session history
+     - **Recent Sessions Table**:
+       - Sortable table with columns:
+         - Date/Time
+         - Score
+         - Accuracy
+         - Questions Answered
+         - Max Streak
+         - Duration
+         - Action: "View Details" (expands to show pattern breakdown)
+       - Pagination (10 per page)
+       - Expandable rows showing per-pattern performance for that session
+   - API Endpoint: `GET /api/history/play` - Returns sessions + pattern mastery
+
+3. **Create `/history/learn` - Learning Progress Dashboard**
+   - Detailed stats for lesson quizzes and progress
+   - Components:
+     - **Learning Overview**:
+       - Total lessons completed / total lessons
+       - Average lesson quiz score
+       - Total time spent in lessons (estimated)
+       - Current learning streak (consecutive lessons)
+       - Progress bar showing curriculum completion
+     - **Category Breakdown**:
+       - 4 category cards (Basics, Patterns, Psychology, Risk Management)
+       - Each card shows:
+         - Lessons completed in category
+         - Average quiz score for category
+         - Last accessed date
+         - "Continue Learning" button
+     - **Mastery by Category Chart**:
+       - Radar chart showing mastery level across 4 categories
+       - Each axis represents a category
+       - Values based on avg quiz scores in that category
+     - **Recent Lessons Table**:
+       - Sortable table with columns:
+         - Lesson Title
+         - Category
+         - Completed (✓/✗)
+         - Quiz Score
+         - Last Accessed
+         - Action: "Review" or "Retake Quiz"
+       - Filter by category
+       - Search by lesson title
+     - **Recommended Next Lessons**:
+       - Smart recommendations based on:
+         - Incomplete lessons
+         - Low quiz scores (suggest review)
+         - Prerequisites completed
+         - Related to weak patterns (from play sessions)
+   - API Endpoints:
+     - `GET /api/history/learn` - Returns lesson progress + category stats
+     - `GET /api/lessons/recommendations` - Returns personalized lesson suggestions
+
+4. **API Implementations**
+   - Create `src/routes/api/history/play.ts`:
+     - Fetch all session_results for user
+     - Fetch all pattern_mastery for user
+     - Calculate aggregate stats (avg score, best score, total sessions, etc.)
+     - Return formatted data for charts and tables
+   - Create `src/routes/api/history/learn.ts`:
+     - Fetch all lesson_progress for user
+     - Join with lessons table to get full details
+     - Calculate category-wise stats
+     - Calculate overall completion percentage
+     - Return formatted data
+   - Create `src/routes/api/lessons/recommendations.ts`:
+     - Analyze user's lesson progress
+     - Identify incomplete lessons
+     - Identify lessons with low quiz scores (<70%)
+     - Match weak patterns from play sessions to related lessons
+     - Return sorted list of recommended lessons
+
+5. **Shared Components**
+   - Create `src/components/history/StatsCard.tsx`:
+     - Reusable card for displaying key metrics
+     - Props: title, value, subtitle, icon, color
+   - Create `src/components/history/ActivityHeatmap.tsx`:
+     - Calendar heatmap visualization
+     - Uses date-fns for date handling
+     - Responsive grid layout
+   - Create `src/components/history/SessionTable.tsx`:
+     - Reusable sortable/filterable table
+     - Pagination built-in
+     - Expandable rows
+   - Create `src/components/history/PatternHeatmap.tsx`:
+     - Grid of all 16 patterns with color coding
+     - Interactive (click to filter)
+     - Tooltip on hover
+   - Create `src/components/charts/LineChart.tsx`:
+     - Simple line chart using canvas or SVG
+     - Props: data, xLabel, yLabel, color
+   - Create `src/components/charts/RadarChart.tsx`:
+     - Radar/spider chart for category mastery
+     - Props: categories, values, maxValue
+
+6. **Data Fetching & Caching**
+   - Use SolidStart's `createAsync` for data fetching
+   - Cache session data for 5 minutes (KV)
+   - Implement loading skeletons for all charts
+   - Handle empty states (no sessions yet, no lessons completed)
+
+7. **Responsive Design**
+   - Desktop: Multi-column layouts, full charts
+   - Tablet: 2-column layouts, condensed charts
+   - Mobile: Single column, simplified charts, collapsible sections
+
+**Deliverables**:
+- ✅ `/history` shows unified overview with activity heatmap
+- ✅ `/history/play` displays comprehensive play session analytics
+- ✅ `/history/learn` displays learning progress and recommendations
+- ✅ All charts render correctly and are responsive
+- ✅ Pattern mastery heatmap is interactive and color-coded
+- ✅ Recent sessions table is sortable and expandable
+- ✅ API endpoints return formatted data efficiently
+- ✅ Empty states and loading states handled gracefully
+
+**Testing Checklist**:
+- [ ] Play multiple sessions, verify stats update correctly
+- [ ] Complete lessons, verify learning stats update
+- [ ] Check heatmap colors match accuracy ranges
+- [ ] Test sorting/filtering in tables
+- [ ] Test responsive layouts on mobile/tablet
+- [ ] Verify date formatting and timezone handling
+- [ ] Check performance with 100+ sessions
+- [ ] Test empty states (new user with no history)
+
+**Design Considerations**:
+- **Color Coding**:
+  - Accuracy: Red (<60%), Yellow (60-80%), Green (>80%)
+  - Heatmap intensity: Light to dark based on activity/mastery
+- **Charts**:
+  - Use consistent color scheme (primary color for main data)
+  - Show gridlines and axis labels
+  - Responsive sizing based on container
+- **Navigation**:
+  - Breadcrumbs: History > Play or History > Learn
+  - Tab navigation on `/history` page
+  - "Back to History" button on detail pages
+
+---
+
 **Overall Phase 4 Deliverables**:
 - ✅ Chart displays and animates historical data (4.1, 4.4)
 - ✅ Quizzes appear at random intervals with visual highlighting (4.5)

@@ -5,7 +5,20 @@
  */
 
 import type { CandlestickData } from "lightweight-charts";
-import { PatternService, type Pattern } from "./PatternService";
+import { PatternService, type Pattern, type Candle } from "./PatternService";
+
+/**
+ * Convert CandlestickData to Candle format for PatternService
+ */
+function convertToCandle(data: CandlestickData): Candle {
+  return {
+    time: typeof data.time === "string" ? Date.parse(data.time) : (data.time as number),
+    open: data.open,
+    high: data.high,
+    low: data.low,
+    close: data.close,
+  };
+}
 
 // Message types for worker communication
 export type WorkerMessageType =
@@ -23,7 +36,8 @@ export type MainThreadMessageType =
   | "TICK"
   | "COMPLETE"
   | "ERROR"
-  | "QUIZ_EVENT";
+  | "QUIZ_EVENT"
+  | "SCORE_UPDATE";
 
 export interface WorkerMessage {
   type: WorkerMessageType;
@@ -42,6 +56,149 @@ export interface QuizData {
   explanation: string;
   pattern: Pattern;
   timeLimit: number;
+  startTime?: number; // Timestamp when quiz was shown
+}
+
+export interface ScoreUpdate {
+  score: number;
+  streak: number;
+  correctCount: number;
+  incorrectCount: number;
+  totalQuestions: number;
+  pointsEarned: number; // Points from most recent answer
+}
+
+export interface PatternAttempt {
+  patternName: string;
+  correct: boolean;
+  timeTaken: number; // seconds
+}
+
+/**
+ * Scoring Engine - Calculates points with time bonuses and streak multipliers
+ */
+class ScoringEngine {
+  private score: number = 0;
+  private streak: number = 0;
+  private maxStreak: number = 0;
+  private correctCount: number = 0;
+  private incorrectCount: number = 0;
+  private patternAttempts: PatternAttempt[] = [];
+
+  // Scoring constants
+  private readonly BASE_POINTS = 100;
+  private readonly FAST_ANSWER_THRESHOLD = 5; // seconds
+  private readonly MEDIUM_ANSWER_THRESHOLD = 10; // seconds
+  private readonly FAST_BONUS_MULTIPLIER = 1.5; // +50%
+  private readonly MEDIUM_BONUS_MULTIPLIER = 1.2; // +20%
+
+  /**
+   * Calculate points for an answer
+   */
+  calculatePoints(isCorrect: boolean, timeTaken: number): number {
+    if (!isCorrect) {
+      return 0;
+    }
+
+    let points = this.BASE_POINTS;
+
+    // Apply time pressure bonus
+    if (timeTaken <= this.FAST_ANSWER_THRESHOLD) {
+      points *= this.FAST_BONUS_MULTIPLIER;
+    } else if (timeTaken <= this.MEDIUM_ANSWER_THRESHOLD) {
+      points *= this.MEDIUM_BONUS_MULTIPLIER;
+    }
+
+    // Apply streak multiplier
+    const streakMultiplier = this.getStreakMultiplier();
+    points *= streakMultiplier;
+
+    return Math.round(points);
+  }
+
+  /**
+   * Get streak multiplier based on current streak
+   */
+  private getStreakMultiplier(): number {
+    if (this.streak >= 10) return 3.0;
+    if (this.streak >= 5) return 2.0;
+    if (this.streak >= 3) return 1.5;
+    return 1.0;
+  }
+
+  /**
+   * Submit an answer and update score/streak
+   */
+  submitAnswer(
+    patternName: string,
+    isCorrect: boolean,
+    timeTaken: number
+  ): ScoreUpdate {
+    // Calculate points
+    const pointsEarned = this.calculatePoints(isCorrect, timeTaken);
+
+    // Update score
+    this.score += pointsEarned;
+
+    // Update streak
+    if (isCorrect) {
+      this.streak++;
+      this.maxStreak = Math.max(this.maxStreak, this.streak);
+      this.correctCount++;
+    } else {
+      this.streak = 0;
+      this.incorrectCount++;
+    }
+
+    // Track attempt
+    this.patternAttempts.push({
+      patternName,
+      correct: isCorrect,
+      timeTaken,
+    });
+
+    return this.getScoreUpdate(pointsEarned);
+  }
+
+  /**
+   * Get current score update
+   */
+  getScoreUpdate(pointsEarned: number = 0): ScoreUpdate {
+    return {
+      score: this.score,
+      streak: this.streak,
+      correctCount: this.correctCount,
+      incorrectCount: this.incorrectCount,
+      totalQuestions: this.correctCount + this.incorrectCount,
+      pointsEarned,
+    };
+  }
+
+  /**
+   * Get pattern attempts for session summary
+   */
+  getPatternAttempts(): PatternAttempt[] {
+    return this.patternAttempts;
+  }
+
+  /**
+   * Get max streak achieved
+   */
+  getMaxStreak(): number {
+    return this.maxStreak;
+  }
+
+  /**
+   * Reset scoring for new session
+   */
+  reset() {
+    this.score = 0;
+    this.streak = 0;
+    this.maxStreak = 0;
+    this.correctCount = 0;
+    this.incorrectCount = 0;
+    this.patternAttempts = [];
+  }
 }
 
 /**
@@ -55,6 +212,7 @@ interface SimulationState {
   intervalId: number | null;
   nextQuizAt: number | null; // Index at which next quiz should appear
   quizActive: boolean;
+  currentQuiz: QuizData | null; // Track current quiz for scoring
 }
 
 /**
@@ -69,15 +227,18 @@ class SimulatorWorker {
     intervalId: null,
     nextQuizAt: null,
     quizActive: false,
+    currentQuiz: null,
   };
+
+  private scoringEngine = new ScoringEngine();
 
   // Base interval in milliseconds (represents 1x speed)
   // For 1h candles, we'll use a faster playback (1 second per candle at 1x)
   private readonly BASE_INTERVAL = 1000;
 
   // Quiz interval range (in number of candles)
-  private readonly MIN_QUIZ_INTERVAL = 8;
-  private readonly MAX_QUIZ_INTERVAL = 45;
+  private readonly MIN_QUIZ_INTERVAL = 5;
+  private readonly MAX_QUIZ_INTERVAL = 20;
 
   // List of all pattern names for generating distractors
   private readonly PATTERN_NAMES = [
@@ -132,6 +293,13 @@ class SimulatorWorker {
     this.state.isPlaying = true;
     this.state.currentIndex = 0;
     this.state.quizActive = false;
+    this.state.currentQuiz = null;
+
+    // Reset scoring for new session
+    this.scoringEngine.reset();
+
+    // Send initial score update
+    this.sendMessage("SCORE_UPDATE", this.scoringEngine.getScoreUpdate());
 
     // Schedule the first quiz
     this.scheduleNextQuiz();
@@ -216,8 +384,10 @@ class SimulatorWorker {
       return null;
     }
 
-    // Get the visible data up to current point
-    const visibleData = this.state.data.slice(0, this.state.currentIndex + 1);
+    // Get the visible data up to current point and convert to Candle format
+    const visibleData = this.state.data
+      .slice(0, this.state.currentIndex + 1)
+      .map(convertToCandle);
     console.log("[Worker] Detecting patterns in", visibleData.length, "candles");
 
     // Look backwards through the last 10 candles to find a pattern
@@ -311,6 +481,53 @@ class SimulatorWorker {
   }
 
   /**
+   * Handle answer submission from user
+   */
+  private handleAnswerSubmission(payload: { answer: string }) {
+    if (!this.state.currentQuiz) {
+      console.warn("[Worker] No active quiz to score");
+      return;
+    }
+
+    const { answer } = payload;
+    const quiz = this.state.currentQuiz;
+
+    // Calculate time taken
+    const endTime = Date.now();
+    const startTime = quiz.startTime || endTime;
+    const timeTaken = (endTime - startTime) / 1000; // Convert to seconds
+
+    // Check if answer is correct
+    const isCorrect = answer === quiz.correctAnswer;
+
+    // Submit to scoring engine
+    const scoreUpdate = this.scoringEngine.submitAnswer(
+      quiz.pattern.name,
+      isCorrect,
+      timeTaken
+    );
+
+    console.log(
+      "[Worker] Answer submitted:",
+      isCorrect ? "CORRECT" : "INCORRECT",
+      "| Time:",
+      timeTaken.toFixed(1),
+      "s | Points:",
+      scoreUpdate.pointsEarned,
+      "| Total:",
+      scoreUpdate.score
+    );
+
+    // Send score update to main thread
+    this.sendMessage("SCORE_UPDATE", scoreUpdate);
+
+    // Deactivate quiz and schedule next one
+    this.state.quizActive = false;
+    this.state.currentQuiz = null;
+    this.scheduleNextQuiz();
+  }
+
+  /**
    * Start the tick loop
    */
   private startTickLoop() {
@@ -352,8 +569,20 @@ class SimulatorWorker {
     if (this.state.currentIndex >= this.state.data.length) {
       console.log("[Worker] Simulation complete");
       this.pause();
+
+      // Get final session summary
+      const scoreUpdate = this.scoringEngine.getScoreUpdate();
+      const patternAttempts = this.scoringEngine.getPatternAttempts();
+      const maxStreak = this.scoringEngine.getMaxStreak();
+
       this.sendMessage("COMPLETE", {
         totalCandles: this.state.data.length,
+        score: scoreUpdate.score,
+        correctCount: scoreUpdate.correctCount,
+        incorrectCount: scoreUpdate.incorrectCount,
+        accuracy: scoreUpdate.correctCount / Math.max(1, scoreUpdate.totalQuestions),
+        maxStreak,
+        patternAttempts,
       });
       return;
     }
@@ -367,7 +596,10 @@ class SimulatorWorker {
       const quiz = this.generateQuiz();
       if (quiz) {
         console.log("[Worker] Triggering quiz at index", this.state.currentIndex);
+        // Add timestamp to quiz
+        quiz.startTime = Date.now();
         this.state.quizActive = true;
+        this.state.currentQuiz = quiz;
         this.sendMessage("QUIZ_EVENT", quiz);
         return; // Don't advance candle while quiz is active
       } else {
@@ -421,10 +653,7 @@ class SimulatorWorker {
         this.reset();
         break;
       case "SUBMIT_ANSWER":
-        // User submitted an answer, deactivate quiz and schedule next one
-        this.state.quizActive = false;
-        this.scheduleNextQuiz();
-        console.log("[Worker] Answer submitted, quiz deactivated");
+        this.handleAnswerSubmission(payload);
         break;
       default:
         console.warn("[Worker] Unknown message type:", type);

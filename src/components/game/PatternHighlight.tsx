@@ -3,7 +3,7 @@
  * Dims the entire chart with a vignette and highlights the pattern area
  */
 
-import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, Show } from "solid-js";
 import type { CandlestickData } from "lightweight-charts";
 import type { Pattern } from "~/game/PatternService";
 
