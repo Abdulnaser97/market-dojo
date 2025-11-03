@@ -1,24 +1,52 @@
 import { Title } from "@solidjs/meta";
 import { CandlestickData } from "lightweight-charts";
-import { createSignal, onMount } from "solid-js";
+import { createSignal, onMount, onCleanup } from "solid-js";
 import Nav from "~/components/layout/Nav";
 import ChartView from "~/components/game/ChartView";
 import GameHUD from "~/components/game/GameHUD";
 import QuizDialog from "~/components/game/QuizDialog";
 import SessionSummary from "~/components/game/SessionSummary";
+import type { WorkerMessage, MainThreadMessage } from "~/game/simulator.worker";
+// @ts-ignore - Vite handles worker imports
+import SimulatorWorker from "~/game/simulator.worker?worker";
 
 export default function Play() {
-  const [chartData, setChartData] = createSignal<CandlestickData[]>([]);
+  // Data loading state
+  const [fullData, setFullData] = createSignal<CandlestickData[]>([]);
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);
 
-  // Demo state for UI components (Phase 4.3 - non-functional)
+  // Simulation state
+  const [animatedData, setAnimatedData] = createSignal<CandlestickData[]>([]);
+  const [isPlaying, setIsPlaying] = createSignal(false);
+  const [isPaused, setIsPaused] = createSignal(false);
+  const [speed, setSpeed] = createSignal(1);
+  const [progress, setProgress] = createSignal(0);
+  const [hasStarted, setHasStarted] = createSignal(false);
+
+  // Number of initial candles to show for context
+  const INITIAL_CANDLES = 50;
+
+  // Game state (Phase 4.3 demo values, will be real in Phase 4.6)
+  const [score, setScore] = createSignal(0);
+  const [streak, setStreak] = createSignal(0);
+  const [elapsedSeconds, setElapsedSeconds] = createSignal(0);
+
+  // UI demo state
   const [showQuizDemo, setShowQuizDemo] = createSignal(false);
   const [showSummaryDemo, setShowSummaryDemo] = createSignal(false);
-  const [demoScore, setDemoScore] = createSignal(1250);
-  const [demoStreak, setDemoStreak] = createSignal(5);
-  const [demoSpeed, setDemoSpeed] = createSignal(1);
-  const [demoPaused, setDemoPaused] = createSignal(false);
+
+  // Worker instance
+  let worker: Worker | null = null;
+  let timerInterval: number | null = null;
+
+  // Format elapsed time as MM:SS
+  const formattedTime = () => {
+    const seconds = elapsedSeconds();
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
 
   onMount(async () => {
     try {
@@ -31,8 +59,16 @@ export default function Play() {
       console.log("[Play] API response:", result);
 
       if (result.success) {
-        setChartData(result.data);
+        setFullData(result.data);
         console.log(`[Play] Loaded ${result.data.length} candlesticks (cached: ${result.cached})`);
+
+        // Show initial candles for context
+        const initialCandles = result.data.slice(0, INITIAL_CANDLES);
+        setAnimatedData(initialCandles);
+        console.log(`[Play] Showing initial ${INITIAL_CANDLES} candles for context`);
+
+        // Initialize worker
+        initializeWorker(result.data);
       } else {
         setError(result.error || "Failed to load chart data");
       }
@@ -43,6 +79,145 @@ export default function Play() {
       setLoading(false);
     }
   });
+
+  onCleanup(() => {
+    // Clean up worker and timer
+    if (worker) {
+      worker.terminate();
+    }
+    if (timerInterval !== null) {
+      clearInterval(timerInterval);
+    }
+  });
+
+  /**
+   * Initialize the simulator worker
+   */
+  function initializeWorker(data: CandlestickData[]) {
+    console.log("[Play] Initializing worker with", data.length, "candles");
+
+    worker = new SimulatorWorker();
+
+    // Handle messages from worker
+    worker.onmessage = (event: MessageEvent<MainThreadMessage>) => {
+      const { type, payload } = event.data;
+
+      switch (type) {
+        case "READY":
+          console.log("[Play] Worker ready, total candles:", payload.totalCandles);
+          break;
+
+        case "TICK":
+          // Add new candle to animated data
+          console.log("[Play] TICK received, index:", payload.index, "progress:", payload.progress.toFixed(1) + "%");
+          console.log("[Play] Candle data:", payload.candle);
+          setAnimatedData((prev) => {
+            const newData = [...prev, payload.candle];
+            console.log("[Play] animatedData updated, new length:", newData.length);
+            return newData;
+          });
+          setProgress(payload.progress);
+          break;
+
+        case "COMPLETE":
+          console.log("[Play] Simulation complete");
+          setIsPlaying(false);
+          setIsPaused(false);
+          stopTimer();
+          break;
+
+        case "ERROR":
+          console.error("[Play] Worker error:", payload.message);
+          setError(payload.message);
+          break;
+      }
+    };
+
+    // Initialize worker with data
+    const message: WorkerMessage = {
+      type: "INIT",
+      payload: { data },
+    };
+    worker.postMessage(message);
+  }
+
+  /**
+   * Start the simulation
+   */
+  function startSimulation() {
+    if (!worker) return;
+
+    console.log("[Play] Starting simulation");
+    setAnimatedData([]);
+    setElapsedSeconds(0);
+    setScore(0);
+    setStreak(0);
+    setIsPlaying(true);
+    setIsPaused(false);
+    setHasStarted(true);
+
+    const message: WorkerMessage = { type: "START" };
+    worker.postMessage(message);
+
+    startTimer();
+  }
+
+  /**
+   * Toggle pause/resume
+   */
+  function togglePause() {
+    if (!worker) return;
+
+    if (isPaused()) {
+      console.log("[Play] Resuming");
+      setIsPaused(false);
+      const message: WorkerMessage = { type: "RESUME" };
+      worker.postMessage(message);
+      startTimer();
+    } else {
+      console.log("[Play] Pausing");
+      setIsPaused(true);
+      const message: WorkerMessage = { type: "PAUSE" };
+      worker.postMessage(message);
+      stopTimer();
+    }
+  }
+
+  /**
+   * Change playback speed
+   */
+  function changeSpeed(newSpeed: number) {
+    if (!worker) return;
+
+    console.log("[Play] Changing speed to", newSpeed);
+    setSpeed(newSpeed);
+
+    const message: WorkerMessage = {
+      type: "SET_SPEED",
+      payload: { speed: newSpeed },
+    };
+    worker.postMessage(message);
+  }
+
+  /**
+   * Start the timer
+   */
+  function startTimer() {
+    stopTimer(); // Clear any existing timer
+    timerInterval = window.setInterval(() => {
+      setElapsedSeconds((prev) => prev + 1);
+    }, 1000);
+  }
+
+  /**
+   * Stop the timer
+   */
+  function stopTimer() {
+    if (timerInterval !== null) {
+      clearInterval(timerInterval);
+      timerInterval = null;
+    }
+  }
 
   return (
     <main>
@@ -110,24 +285,29 @@ export default function Play() {
               {/* Game HUD - Horizontal bar at top */}
               <div style={{ padding: "1.5rem 1.5rem 0 1.5rem" }}>
                 <GameHUD
-                  score={demoScore()}
-                  streak={demoStreak()}
-                  timer="05:32"
-                  speed={demoSpeed()}
-                  isPaused={demoPaused()}
-                  onSpeedChange={(speed) => setDemoSpeed(speed)}
-                  onPauseToggle={() => setDemoPaused(!demoPaused())}
+                  score={score()}
+                  streak={streak()}
+                  timer={formattedTime()}
+                  speed={speed()}
+                  isPaused={isPaused()}
+                  hasStarted={hasStarted()}
+                  onSpeedChange={changeSpeed}
+                  onPauseToggle={togglePause}
+                  onStart={startSimulation}
                 />
               </div>
               {/* Chart below HUD */}
               <div style={{ padding: "1.5rem" }}>
-                <ChartView data={chartData()} height={600} />
+                <ChartView
+                  data={animatedData()}
+                  height={600}
+                />
               </div>
             </>
           )}
         </div>
 
-        {/* Demo Controls - Phase 4.3 UI Shell */}
+        {/* Controls - Phase 4.4 Simulation */}
         <div style={{ "margin-top": "1.5rem", "text-align": "center" }}>
           <p
             style={{
@@ -136,42 +316,64 @@ export default function Play() {
               "margin-bottom": "1rem",
             }}
           >
-            Phase 4.3: UI Shell Demo (non-functional components)
+            Phase 4.4: Simulation Engine (animated chart playback)
+            {isPlaying() && ` | Progress: ${Math.round(progress())}%`}
           </p>
           <div style={{ display: "flex", gap: "1rem", "justify-content": "center", "flex-wrap": "wrap" }}>
+            <button
+              onClick={startSimulation}
+              disabled={isPlaying() || isPaused()}
+              style={{
+                padding: "0.75rem 2rem",
+                "border-radius": "0.5rem",
+                border: "none",
+                "background-color":
+                  isPlaying() || isPaused()
+                    ? "var(--color-bg-secondary)"
+                    : "var(--color-primary)",
+                color: isPlaying() || isPaused() ? "var(--color-text-secondary)" : "white",
+                "font-weight": "600",
+                "font-size": "1rem",
+                cursor: isPlaying() || isPaused() ? "not-allowed" : "pointer",
+                transition: "all 0.2s",
+                opacity: isPlaying() || isPaused() ? "0.5" : "1",
+              }}
+            >
+              {isPlaying() || isPaused() ? "▶ Simulation Running" : "▶ Start Simulation"}
+            </button>
             <button
               onClick={() => setShowQuizDemo(!showQuizDemo())}
               style={{
                 padding: "0.75rem 1.5rem",
                 "border-radius": "0.5rem",
-                border: "2px solid var(--color-primary)",
+                border: "2px solid var(--color-border)",
                 "background-color": showQuizDemo()
                   ? "var(--color-primary)"
                   : "var(--color-bg-secondary)",
-                color: showQuizDemo() ? "white" : "var(--color-primary)",
+                color: showQuizDemo() ? "white" : "var(--color-text-primary)",
                 "font-weight": "600",
                 cursor: "pointer",
                 transition: "all 0.2s",
               }}
             >
-              {showQuizDemo() ? "Hide" : "Show"} Quiz Dialog
+              {showQuizDemo() ? "Hide" : "Show"} Quiz Demo
             </button>
             <button
               onClick={() => setShowSummaryDemo(!showSummaryDemo())}
               style={{
                 padding: "0.75rem 1.5rem",
                 "border-radius": "0.5rem",
-                border: "2px solid var(--color-primary)",
+                border: "2px solid var(--color-border)",
                 "background-color": showSummaryDemo()
                   ? "var(--color-primary)"
                   : "var(--color-bg-secondary)",
-                color: showSummaryDemo() ? "white" : "var(--color-primary)",
+                color: showSummaryDemo() ? "white" : "var(--color-text-primary)",
                 "font-weight": "600",
                 cursor: "pointer",
                 transition: "all 0.2s",
               }}
             >
-              {showSummaryDemo() ? "Hide" : "Show"} Session Summary
+              {showSummaryDemo() ? "Hide" : "Show"} Summary Demo
             </button>
           </div>
         </div>
@@ -195,12 +397,13 @@ export default function Play() {
         {/* Session Summary Component */}
         <SessionSummary
           isOpen={showSummaryDemo()}
-          finalScore={demoScore()}
+          finalScore={score()}
           totalQuestions={12}
           correctAnswers={9}
+          duration={formattedTime()}
           onPlayAgain={() => {
             setShowSummaryDemo(false);
-            console.log("Play Again clicked");
+            startSimulation();
           }}
         />
       </div>

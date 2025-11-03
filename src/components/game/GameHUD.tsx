@@ -9,8 +9,10 @@ export interface GameHUDProps {
   timer?: string;
   speed?: number;
   isPaused?: boolean;
+  hasStarted?: boolean;
   onSpeedChange?: (speed: number) => void;
   onPauseToggle?: () => void;
+  onStart?: () => void;
 }
 
 export default function GameHUD(props: GameHUDProps) {
@@ -19,8 +21,20 @@ export default function GameHUD(props: GameHUDProps) {
   const timer = () => props.timer ?? "00:00";
   const speed = () => props.speed ?? 1;
   const isPaused = () => props.isPaused ?? false;
+  const hasStarted = () => props.hasStarted ?? false;
 
   const speedOptions = [1, 2, 5, 10];
+
+  // Determine button state and action
+  const getButtonConfig = () => {
+    if (!hasStarted()) {
+      return { label: "▶ Start", color: "var(--color-success)", action: () => props.onStart?.() };
+    } else if (isPaused()) {
+      return { label: "▶ Resume", color: "var(--color-success)", action: () => props.onPauseToggle?.() };
+    } else {
+      return { label: "⏸ Pause", color: "var(--color-warning)", action: () => props.onPauseToggle?.() };
+    }
+  };
 
   return (
     <div
@@ -173,16 +187,14 @@ export default function GameHUD(props: GameHUDProps) {
           ))}
         </div>
 
-        {/* Pause/Resume Button */}
+        {/* Start/Pause/Resume Button */}
         <button
-          onClick={() => props.onPauseToggle?.()}
+          onClick={() => getButtonConfig().action()}
           style={{
             padding: "0.5rem 1.5rem",
             "border-radius": "0.25rem",
             border: "1px solid var(--color-border)",
-            "background-color": isPaused()
-              ? "var(--color-success)"
-              : "var(--color-warning)",
+            "background-color": getButtonConfig().color,
             color: "white",
             "font-weight": "600",
             "font-size": "0.875rem",
@@ -197,7 +209,7 @@ export default function GameHUD(props: GameHUDProps) {
             e.currentTarget.style.opacity = "1";
           }}
         >
-          {isPaused() ? "▶ Resume" : "⏸ Pause"}
+          {getButtonConfig().label}
         </button>
       </div>
     </div>

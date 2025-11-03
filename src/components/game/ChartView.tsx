@@ -12,6 +12,7 @@ export default function ChartView(props: ChartViewProps) {
   let chart: any;
   let candlestickSeries: any;
   let resizeHandler: (() => void) | undefined;
+  let lastUpdateTime: number | null = null;
 
   // Register cleanup synchronously (before async work)
   onCleanup(() => {
@@ -81,6 +82,8 @@ export default function ChartView(props: ChartViewProps) {
     if (props.data.length > 0) {
       candlestickSeries.setData(props.data);
       chart.timeScale().fitContent();
+      lastUpdateTime = props.data[props.data.length - 1].time as number;
+      console.log("[ChartView] Initial data set:", props.data.length, "candles, last time:", lastUpdateTime);
     }
 
     // Handle window resize
@@ -95,13 +98,57 @@ export default function ChartView(props: ChartViewProps) {
     window.addEventListener("resize", resizeHandler);
   });
 
-  // Update data when props change
+  // Update data when props change - following Lightweight Charts realtime pattern
   createEffect(() => {
-    if (candlestickSeries && props.data.length > 0) {
+    console.log("[ChartView] createEffect fired, data length:", props.data.length);
+    console.log("[ChartView] candlestickSeries exists?", !!candlestickSeries);
+    console.log("[ChartView] lastUpdateTime:", lastUpdateTime);
+
+    if (!candlestickSeries) {
+      console.log("[ChartView] No candlestickSeries, skipping update");
+      return;
+    }
+
+    const dataLength = props.data.length;
+
+    // If data is empty, clear the chart (but keep ready for updates)
+    if (dataLength === 0) {
+      candlestickSeries.setData([]);
+      lastUpdateTime = -1; // Sentinel: cleared and ready for updates
+      console.log("[ChartView] Chart cleared, ready for updates");
+      return;
+    }
+
+    const lastCandle = props.data[dataLength - 1];
+    const candleTime = lastCandle.time as number;
+    console.log("[ChartView] Last candle:", lastCandle);
+
+    // After clearing (lastUpdateTime === -1), start using update()
+    if (lastUpdateTime === -1) {
+      console.log("[ChartView] Calling update() for first candle after clear");
+      candlestickSeries.update(lastCandle);
+      lastUpdateTime = candleTime;
+      console.log("[ChartView] First update after clear, time:", candleTime);
+    }
+    // If this is a new candle (different timestamp), use update() for realtime addition
+    else if (lastUpdateTime !== null && candleTime !== lastUpdateTime) {
+      console.log("[ChartView] Calling update() for new candle");
+      candlestickSeries.update(lastCandle);
+      lastUpdateTime = candleTime;
+      console.log("[ChartView] Realtime update - new candle at time:", candleTime);
+    }
+    // Initial data load
+    else if (lastUpdateTime === null) {
+      console.log("[ChartView] Calling setData() for initial load");
       candlestickSeries.setData(props.data);
+      lastUpdateTime = candleTime;
       if (chart) {
         chart.timeScale().fitContent();
       }
+      console.log("[ChartView] Full data load -", dataLength, "candles");
+    }
+    else {
+      console.log("[ChartView] No action taken - same timestamp?");
     }
   });
 
