@@ -6,7 +6,8 @@ import ChartView from "~/components/game/ChartView";
 import GameHUD from "~/components/game/GameHUD";
 import QuizDialog from "~/components/game/QuizDialog";
 import SessionSummary from "~/components/game/SessionSummary";
-import type { WorkerMessage, MainThreadMessage } from "~/game/simulator.worker";
+import type { WorkerMessage, MainThreadMessage, QuizData } from "~/game/simulator.worker";
+import type { Pattern } from "~/game/PatternService";
 // @ts-ignore - Vite handles worker imports
 import SimulatorWorker from "~/game/simulator.worker?worker";
 
@@ -32,13 +33,22 @@ export default function Play() {
   const [streak, setStreak] = createSignal(0);
   const [elapsedSeconds, setElapsedSeconds] = createSignal(0);
 
+  // Quiz state
+  const [currentQuiz, setCurrentQuiz] = createSignal<QuizData | null>(null);
+  const [quizTimeRemaining, setQuizTimeRemaining] = createSignal(15);
+  const [selectedAnswer, setSelectedAnswer] = createSignal<string | null>(null);
+  const [showExplanation, setShowExplanation] = createSignal(false);
+
   // UI demo state
-  const [showQuizDemo, setShowQuizDemo] = createSignal(false);
   const [showSummaryDemo, setShowSummaryDemo] = createSignal(false);
+
+  // Debug mode
+  const [debugMode, setDebugMode] = createSignal(false);
 
   // Worker instance
   let worker: Worker | null = null;
   let timerInterval: number | null = null;
+  let quizTimerInterval: number | null = null;
 
   // Format elapsed time as MM:SS
   const formattedTime = () => {
@@ -78,15 +88,31 @@ export default function Play() {
     } finally {
       setLoading(false);
     }
+
+    // Add keyboard shortcut for debug mode (Shift+D)
+    const handleKeyPress = (e: KeyboardEvent) => {
+      if (e.shiftKey && e.key === 'D') {
+        setDebugMode(!debugMode());
+        console.log("[Play] Debug mode:", !debugMode() ? "ENABLED" : "DISABLED");
+      }
+    };
+    window.addEventListener("keydown", handleKeyPress);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyPress);
+    };
   });
 
   onCleanup(() => {
-    // Clean up worker and timer
+    // Clean up worker and timers
     if (worker) {
       worker.terminate();
     }
     if (timerInterval !== null) {
       clearInterval(timerInterval);
+    }
+    if (quizTimerInterval !== null) {
+      clearInterval(quizTimerInterval);
     }
   });
 
@@ -124,6 +150,15 @@ export default function Play() {
           setIsPlaying(false);
           setIsPaused(false);
           stopTimer();
+          break;
+
+        case "QUIZ_EVENT":
+          console.log("[Play] Quiz event received:", payload);
+          setCurrentQuiz(payload);
+          setQuizTimeRemaining(payload.timeLimit);
+          setSelectedAnswer(null);
+          setShowExplanation(false);
+          startQuizTimer();
           break;
 
         case "ERROR":
@@ -219,10 +254,168 @@ export default function Play() {
     }
   }
 
+  /**
+   * Start the quiz countdown timer
+   */
+  function startQuizTimer() {
+    stopQuizTimer(); // Clear any existing timer
+
+    // Skip timer in debug mode
+    if (debugMode()) {
+      console.log("[Play] Debug mode active - quiz timer paused");
+      return;
+    }
+
+    quizTimerInterval = window.setInterval(() => {
+      setQuizTimeRemaining((prev) => {
+        if (prev <= 1) {
+          // Time's up! Auto-submit with no answer
+          handleQuizTimeout();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }
+
+  /**
+   * Stop the quiz timer
+   */
+  function stopQuizTimer() {
+    if (quizTimerInterval !== null) {
+      clearInterval(quizTimerInterval);
+      quizTimerInterval = null;
+    }
+  }
+
+  /**
+   * Handle quiz timeout (no answer selected)
+   */
+  function handleQuizTimeout() {
+    stopQuizTimer();
+    setShowExplanation(true);
+    // Auto-close quiz after showing explanation
+    setTimeout(() => {
+      closeQuiz();
+    }, 3000);
+  }
+
+  /**
+   * Handle answer selection
+   */
+  function handleAnswerSelect(answer: string) {
+    if (showExplanation()) return; // Already answered
+
+    stopQuizTimer();
+    setSelectedAnswer(answer);
+    setShowExplanation(true);
+
+    // Check if correct
+    const quiz = currentQuiz();
+    if (quiz && answer === quiz.correctAnswer) {
+      console.log("[Play] Correct answer!");
+      // TODO: Update score and streak in Phase 4.6
+    } else {
+      console.log("[Play] Incorrect answer!");
+      // TODO: Reset streak in Phase 4.6
+    }
+
+    // Auto-close quiz after 3 seconds
+    setTimeout(() => {
+      closeQuiz();
+    }, 3000);
+  }
+
+  /**
+   * Close the quiz dialog
+   */
+  function closeQuiz() {
+    stopQuizTimer();
+    setCurrentQuiz(null);
+    setSelectedAnswer(null);
+    setShowExplanation(false);
+
+    // Tell worker that answer was submitted
+    if (worker) {
+      const message: WorkerMessage = { type: "SUBMIT_ANSWER" };
+      worker.postMessage(message);
+    }
+  }
+
+  /**
+   * Show demo quiz for testing (includes pattern highlighting)
+   */
+  function showDemoQuiz() {
+    const data = animatedData().length > 0 ? animatedData() : fullData();
+
+    if (data.length < 10) {
+      console.warn("[Play] Not enough data to show demo quiz");
+      return;
+    }
+
+    // Create a demo pattern using some candles in the middle of the visible data
+    const midIndex = Math.floor(data.length / 2);
+    const patternIndices = [midIndex - 2, midIndex - 1, midIndex];
+
+    const demoPattern: Pattern = {
+      name: "Morning Star",
+      type: "three-candle",
+      candleIndices: patternIndices,
+      confidence: 85,
+      sentiment: "bullish",
+      description: "A three-candle reversal pattern indicating a potential bullish reversal",
+    };
+
+    const demoQuiz: QuizData = {
+      question: "What candlestick pattern is forming here?",
+      options: [
+        { label: "A", value: "Morning Star" },
+        { label: "B", value: "Evening Star" },
+        { label: "C", value: "Three White Soldiers" },
+        { label: "D", value: "Three Black Crows" },
+      ],
+      correctAnswer: "Morning Star",
+      explanation: "The Morning Star pattern typically signals a bullish reversal. This is a three-candle pattern with 85% confidence based on the candlestick formation.",
+      pattern: demoPattern,
+      timeLimit: 15,
+    };
+
+    setCurrentQuiz(demoQuiz);
+    setQuizTimeRemaining(15);
+    setSelectedAnswer(null);
+    setShowExplanation(false);
+    startQuizTimer();
+  }
+
   return (
     <main>
       <Title>Play - MarketDojo</Title>
       <Nav />
+
+      {/* Debug Mode Indicator */}
+      {debugMode() && (
+        <div
+          style={{
+            position: "fixed",
+            top: "1rem",
+            right: "1rem",
+            "z-index": "9999",
+            padding: "0.75rem 1.5rem",
+            "border-radius": "0.5rem",
+            "background-color": "var(--color-warning)",
+            color: "white",
+            "font-weight": "bold",
+            "box-shadow": "0 4px 6px rgba(0, 0, 0, 0.3)",
+            display: "flex",
+            "align-items": "center",
+            gap: "0.5rem",
+          }}
+        >
+          <span>🐛</span>
+          <span>DEBUG MODE</span>
+          <span style={{ "font-size": "0.875rem", opacity: "0.9" }}>(Shift+D to toggle)</span>
+        </div>
+      )}
 
       <div
         style={{
@@ -301,6 +494,8 @@ export default function Play() {
                 <ChartView
                   data={animatedData()}
                   height={600}
+                  highlightPattern={currentQuiz()?.pattern ?? null}
+                  showHighlight={currentQuiz() !== null}
                 />
               </div>
             </>
@@ -342,21 +537,36 @@ export default function Play() {
               {isPlaying() || isPaused() ? "▶ Simulation Running" : "▶ Start Simulation"}
             </button>
             <button
-              onClick={() => setShowQuizDemo(!showQuizDemo())}
+              onClick={showDemoQuiz}
               style={{
                 padding: "0.75rem 1.5rem",
                 "border-radius": "0.5rem",
                 border: "2px solid var(--color-border)",
-                "background-color": showQuizDemo()
-                  ? "var(--color-primary)"
-                  : "var(--color-bg-secondary)",
-                color: showQuizDemo() ? "white" : "var(--color-text-primary)",
+                "background-color": "var(--color-bg-secondary)",
+                color: "var(--color-text-primary)",
                 "font-weight": "600",
                 cursor: "pointer",
                 transition: "all 0.2s",
               }}
             >
-              {showQuizDemo() ? "Hide" : "Show"} Quiz Demo
+              Show Quiz Demo
+            </button>
+            <button
+              onClick={() => setDebugMode(!debugMode())}
+              style={{
+                padding: "0.75rem 1.5rem",
+                "border-radius": "0.5rem",
+                border: "2px solid var(--color-border)",
+                "background-color": debugMode()
+                  ? "var(--color-warning)"
+                  : "var(--color-bg-secondary)",
+                color: debugMode() ? "white" : "var(--color-text-primary)",
+                "font-weight": "600",
+                cursor: "pointer",
+                transition: "all 0.2s",
+              }}
+            >
+              {debugMode() ? "🐛 Debug ON" : "Debug Mode"}
             </button>
             <button
               onClick={() => setShowSummaryDemo(!showSummaryDemo())}
@@ -380,18 +590,18 @@ export default function Play() {
 
         {/* Quiz Dialog Component */}
         <QuizDialog
-          isOpen={showQuizDemo()}
-          question="What candlestick pattern is forming here?"
-          options={[
-            { label: "A", value: "Doji" },
-            { label: "B", value: "Hammer" },
-            { label: "C", value: "Bullish Engulfing" },
-            { label: "D", value: "Shooting Star" },
-          ]}
-          timeRemaining={12}
-          totalTime={15}
-          onSelectAnswer={(answer) => console.log("Selected:", answer)}
-          onClose={() => setShowQuizDemo(false)}
+          isOpen={currentQuiz() !== null}
+          question={currentQuiz()?.question}
+          options={currentQuiz()?.options}
+          timeRemaining={quizTimeRemaining()}
+          totalTime={currentQuiz()?.timeLimit || 15}
+          selectedAnswer={selectedAnswer() || undefined}
+          correctAnswer={showExplanation() ? currentQuiz()?.correctAnswer : undefined}
+          explanation={currentQuiz()?.explanation}
+          showExplanation={showExplanation()}
+          debugMode={debugMode()}
+          onSelectAnswer={handleAnswerSelect}
+          onClose={closeQuiz}
         />
 
         {/* Session Summary Component */}

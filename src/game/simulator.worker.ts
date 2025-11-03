@@ -5,6 +5,7 @@
  */
 
 import type { CandlestickData } from "lightweight-charts";
+import { PatternService, type Pattern } from "./PatternService";
 
 // Message types for worker communication
 export type WorkerMessageType =
@@ -14,13 +15,15 @@ export type WorkerMessageType =
   | "RESUME"
   | "STOP"
   | "SET_SPEED"
-  | "RESET";
+  | "RESET"
+  | "SUBMIT_ANSWER";
 
 export type MainThreadMessageType =
   | "READY"
   | "TICK"
   | "COMPLETE"
-  | "ERROR";
+  | "ERROR"
+  | "QUIZ_EVENT";
 
 export interface WorkerMessage {
   type: WorkerMessageType;
@@ -32,6 +35,15 @@ export interface MainThreadMessage {
   payload?: any;
 }
 
+export interface QuizData {
+  question: string;
+  options: Array<{ label: string; value: string }>;
+  correctAnswer: string;
+  explanation: string;
+  pattern: Pattern;
+  timeLimit: number;
+}
+
 /**
  * Simulation state
  */
@@ -41,6 +53,8 @@ interface SimulationState {
   speed: number;
   isPlaying: boolean;
   intervalId: number | null;
+  nextQuizAt: number | null; // Index at which next quiz should appear
+  quizActive: boolean;
 }
 
 /**
@@ -53,11 +67,37 @@ class SimulatorWorker {
     speed: 1,
     isPlaying: false,
     intervalId: null,
+    nextQuizAt: null,
+    quizActive: false,
   };
 
   // Base interval in milliseconds (represents 1x speed)
   // For 1h candles, we'll use a faster playback (1 second per candle at 1x)
   private readonly BASE_INTERVAL = 1000;
+
+  // Quiz interval range (in number of candles)
+  private readonly MIN_QUIZ_INTERVAL = 8;
+  private readonly MAX_QUIZ_INTERVAL = 45;
+
+  // List of all pattern names for generating distractors
+  private readonly PATTERN_NAMES = [
+    "Doji",
+    "Dragonfly Doji",
+    "Gravestone Doji",
+    "Long-legged Doji",
+    "Hammer",
+    "Hanging Man",
+    "Shooting Star",
+    "Inverted Hammer",
+    "Bullish Engulfing",
+    "Bearish Engulfing",
+    "Bullish Harami",
+    "Bearish Harami",
+    "Piercing Line",
+    "Dark Cloud Cover",
+    "Morning Star",
+    "Evening Star",
+  ];
 
   constructor() {
     this.handleMessage = this.handleMessage.bind(this);
@@ -91,6 +131,11 @@ class SimulatorWorker {
     console.log("[Worker] Starting simulation");
     this.state.isPlaying = true;
     this.state.currentIndex = 0;
+    this.state.quizActive = false;
+
+    // Schedule the first quiz
+    this.scheduleNextQuiz();
+
     this.startTickLoop();
   }
 
@@ -146,6 +191,126 @@ class SimulatorWorker {
   }
 
   /**
+   * Schedule the next quiz at a random future index
+   */
+  private scheduleNextQuiz() {
+    const randomInterval =
+      Math.floor(Math.random() * (this.MAX_QUIZ_INTERVAL - this.MIN_QUIZ_INTERVAL + 1)) +
+      this.MIN_QUIZ_INTERVAL;
+
+    this.state.nextQuizAt = this.state.currentIndex + randomInterval;
+    console.log(
+      "[Worker] Next quiz scheduled at index",
+      this.state.nextQuizAt,
+      `(in ${randomInterval} candles)`
+    );
+  }
+
+  /**
+   * Generate a quiz based on detected patterns
+   */
+  private generateQuiz(): QuizData | null {
+    // Need at least 3 candles for pattern detection
+    if (this.state.currentIndex < 3) {
+      console.log("[Worker] Not enough candles for pattern detection, currentIndex:", this.state.currentIndex);
+      return null;
+    }
+
+    // Get the visible data up to current point
+    const visibleData = this.state.data.slice(0, this.state.currentIndex + 1);
+    console.log("[Worker] Detecting patterns in", visibleData.length, "candles");
+
+    // Look backwards through the last 10 candles to find a pattern
+    let pattern: any = null;
+    const lookbackWindow = 10;
+    const startIndex = Math.max(3, this.state.currentIndex - lookbackWindow);
+
+    for (let i = this.state.currentIndex; i >= startIndex && !pattern; i--) {
+      const patterns = PatternService.detectPatterns(visibleData, i);
+      if (patterns.length > 0) {
+        // Pick the pattern with highest confidence
+        pattern = patterns.reduce((best, current) =>
+          current.confidence > best.confidence ? current : best
+        );
+        console.log("[Worker] Found pattern at index", i, ":", pattern.name, "confidence:", pattern.confidence);
+        break;
+      }
+    }
+
+    if (!pattern) {
+      console.log("[Worker] No patterns detected in lookback window");
+      return null;
+    }
+
+    // Generate quiz question
+    const question = "What candlestick pattern is forming here?";
+    const correctAnswer = pattern.name;
+    const distractors = this.generateDistractors(correctAnswer, 3);
+
+    // Shuffle options
+    const options = [
+      { label: "A", value: correctAnswer },
+      { label: "B", value: distractors[0] },
+      { label: "C", value: distractors[1] },
+      { label: "D", value: distractors[2] },
+    ];
+
+    // Fisher-Yates shuffle
+    for (let i = options.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [options[i], options[j]] = [options[j], options[i]];
+    }
+
+    // Re-assign labels after shuffle
+    options.forEach((opt, idx) => {
+      opt.label = String.fromCharCode(65 + idx); // A, B, C, D
+    });
+
+    // Generate explanation
+    const explanation = this.generateExplanation(pattern);
+
+    return {
+      question,
+      options,
+      correctAnswer,
+      explanation,
+      pattern,
+      timeLimit: 15, // 15 seconds to answer
+    };
+  }
+
+  /**
+   * Generate distractor answers (wrong options)
+   */
+  private generateDistractors(correctAnswer: string, count: number): string[] {
+    const available = this.PATTERN_NAMES.filter((name) => name !== correctAnswer);
+    const distractors: string[] = [];
+
+    // Randomly select distractors
+    while (distractors.length < count && available.length > 0) {
+      const randomIndex = Math.floor(Math.random() * available.length);
+      distractors.push(available[randomIndex]);
+      available.splice(randomIndex, 1);
+    }
+
+    return distractors;
+  }
+
+  /**
+   * Generate explanation text for a pattern
+   */
+  private generateExplanation(pattern: Pattern): string {
+    const sentimentText =
+      pattern.sentiment === "bullish"
+        ? "typically signals a bullish reversal"
+        : pattern.sentiment === "bearish"
+          ? "typically signals a bearish reversal"
+          : "indicates indecision in the market";
+
+    return `The ${pattern.name} pattern ${sentimentText}. This is a ${pattern.type} pattern with ${pattern.confidence}% confidence based on the candlestick formation.`;
+  }
+
+  /**
    * Start the tick loop
    */
   private startTickLoop() {
@@ -178,6 +343,11 @@ class SimulatorWorker {
       return;
     }
 
+    // Skip ticks if quiz is active
+    if (this.state.quizActive) {
+      return;
+    }
+
     // Check if we've reached the end
     if (this.state.currentIndex >= this.state.data.length) {
       console.log("[Worker] Simulation complete");
@@ -186,6 +356,25 @@ class SimulatorWorker {
         totalCandles: this.state.data.length,
       });
       return;
+    }
+
+    // Check if it's time for a quiz
+    if (
+      this.state.nextQuizAt !== null &&
+      this.state.currentIndex >= this.state.nextQuizAt
+    ) {
+      console.log("[Worker] Quiz time! Current index:", this.state.currentIndex, "Quiz at:", this.state.nextQuizAt);
+      const quiz = this.generateQuiz();
+      if (quiz) {
+        console.log("[Worker] Triggering quiz at index", this.state.currentIndex);
+        this.state.quizActive = true;
+        this.sendMessage("QUIZ_EVENT", quiz);
+        return; // Don't advance candle while quiz is active
+      } else {
+        // Failed to generate quiz, schedule next one
+        console.log("[Worker] Failed to generate quiz, rescheduling");
+        this.scheduleNextQuiz();
+      }
     }
 
     // Get the current candle and send it to main thread
@@ -230,6 +419,12 @@ class SimulatorWorker {
         break;
       case "RESET":
         this.reset();
+        break;
+      case "SUBMIT_ANSWER":
+        // User submitted an answer, deactivate quiz and schedule next one
+        this.state.quizActive = false;
+        this.scheduleNextQuiz();
+        console.log("[Worker] Answer submitted, quiz deactivated");
         break;
       default:
         console.warn("[Worker] Unknown message type:", type);

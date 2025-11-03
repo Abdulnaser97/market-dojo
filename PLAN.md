@@ -812,6 +812,206 @@ These features can be added after core functionality is stable and deployed.
 - Options trading simulation
 - Backtesting framework (test strategy against historical data)
 
+### Adaptive Pattern Training (Proficiency-Based Chart Generation)
+
+**Goal**: Dynamically generate or select chart data that contains specific patterns tailored to each user's learning level and mastery gaps.
+
+**Current State**: Quiz system uses random historical data and looks for patterns that happen to exist. Pattern selection is random from whatever patterns are detected.
+
+**Enhancement Vision**: Intelligently seed simulation data with patterns the user needs to practice, creating a personalized training experience.
+
+#### Implementation Strategy
+
+1. **User Proficiency Tracking**
+   - Extend `pattern_mastery` table with proficiency levels:
+     - `proficiency_level`: "beginner" | "intermediate" | "advanced" | "expert"
+     - `attempts`: Total quiz attempts for this pattern
+     - `recent_accuracy`: Rolling accuracy over last 10 attempts
+     - `first_seen_at`: When user first learned about this pattern in lessons
+     - `last_practiced_at`: Most recent quiz on this pattern
+   - Track which lessons user has completed to determine "unlocked" patterns
+   - Calculate mastery score (0-100) based on accuracy, consistency, speed
+
+2. **Pattern Difficulty Classification**
+   - **Beginner Patterns**:
+     - Clear, textbook examples (Doji, Hammer, Bullish Engulfing)
+     - High contrast with surrounding candles
+     - Minimal noise or ambiguity
+   - **Intermediate Patterns**:
+     - Less obvious examples with some market noise
+     - Patterns in moderate volatility conditions
+     - Multi-candle patterns (Harami, Piercing Line)
+   - **Advanced Patterns**:
+     - Subtle patterns in complex market conditions
+     - 3-candle patterns (Morning Star, Evening Star)
+     - Patterns during trend reversals with confounding signals
+   - **Expert Patterns**:
+     - Near-miss patterns (looks like pattern but isn't)
+     - Patterns with multiple valid interpretations
+     - Rare or variant patterns (Dragonfly Doji, Long-legged Doji)
+
+3. **Synthetic Chart Data Generation**
+   - Create `ChartGenerator` class with pattern-seeding algorithms:
+     ```typescript
+     class ChartGenerator {
+       // Generate candles that form a specific pattern
+       seedPattern(
+         baseData: CandlestickData[],
+         pattern: PatternType,
+         difficulty: 'beginner' | 'intermediate' | 'advanced',
+         position: number
+       ): CandlestickData[]
+
+       // Mix of realistic market movement + intentional pattern placement
+       generateTrainingChart(
+         userMastery: MasteryData[],
+         sessionLength: number
+       ): CandlestickData[]
+     }
+     ```
+   - Algorithms for creating realistic candles:
+     - Doji: Set `open ≈ close` (within 1-5% of range based on difficulty)
+     - Hammer: Long lower shadow (2-3x body), small upper shadow, body at top
+     - Engulfing: Second candle completely engulfs first with opposite color
+     - Blend synthetic patterns into historical base data for realism
+
+4. **Adaptive Quiz Scheduling**
+   - API endpoint: `POST /api/quiz/generate-session`
+     - Accepts user ID
+     - Returns chart data + scheduled quiz points with target patterns
+   - Scheduling rules:
+     - Prioritize patterns where `accuracy < 70%`
+     - Weight by recency (patterns not seen in 7+ days get higher priority)
+     - Progressive unlocking (don't quiz on patterns from incomplete lessons)
+     - Spaced repetition (review mastered patterns periodically)
+   - Example weighting algorithm:
+     ```typescript
+     weight = (1 - accuracy) * recencyMultiplier * difficultyMultiplier
+     where:
+       recencyMultiplier = min(daysSinceLastSeen / 7, 2)
+       difficultyMultiplier = userLevel === 'beginner' ? 0.5 : 1.5
+     ```
+
+5. **Session Difficulty Calibration**
+   - Track user's overall proficiency across all patterns
+   - Adjust session difficulty:
+     - **Beginner** (avg mastery < 50%): 70% beginner, 25% intermediate, 5% advanced
+     - **Intermediate** (50-75%): 20% beginner, 60% intermediate, 20% advanced
+     - **Advanced** (75-90%): 10% beginner, 30% intermediate, 60% advanced
+     - **Expert** (>90%): 5% beginner, 20% intermediate, 50% advanced, 25% expert
+   - Prevent frustration: Cap difficulty spikes (no more than 2 levels above mastery)
+   - Prevent boredom: Introduce challenge patterns even for experts
+
+6. **Pattern Curriculum Paths**
+   - Define learning progression:
+     ```
+     Level 1: Basic single candles (Doji, Hammer, Shooting Star)
+     Level 2: Reversal candles (Hanging Man, Inverted Hammer)
+     Level 3: Two-candle patterns (Engulfing, Harami)
+     Level 4: Advanced two-candle (Piercing Line, Dark Cloud Cover)
+     Level 5: Three-candle patterns (Morning Star, Evening Star)
+     Level 6: Pattern variations and edge cases
+     ```
+   - Unlock next level when: `avg_mastery_current_level > 80%`
+   - Show progress bars and achievement badges
+
+7. **Quality Metrics & Validation**
+   - Ensure generated patterns pass `PatternService` detection with high confidence
+   - Validate chart realism (no impossible price movements)
+   - A/B test synthetic vs historical data for engagement metrics
+   - Monitor: Time to mastery, frustration rate (repeated failures), retention
+
+#### Database Changes
+
+```sql
+-- Add proficiency tracking
+ALTER TABLE pattern_mastery ADD COLUMN proficiency_level TEXT DEFAULT 'beginner';
+ALTER TABLE pattern_mastery ADD COLUMN attempts INTEGER DEFAULT 0;
+ALTER TABLE pattern_mastery ADD COLUMN recent_accuracy REAL DEFAULT 0;
+ALTER TABLE pattern_mastery ADD COLUMN first_seen_at INTEGER;
+ALTER TABLE pattern_mastery ADD COLUMN last_practiced_at INTEGER;
+
+-- Track curriculum progress
+CREATE TABLE curriculum_progress (
+  user_id INTEGER NOT NULL,
+  level INTEGER NOT NULL,
+  unlocked_at INTEGER,
+  mastered_at INTEGER,
+  PRIMARY KEY (user_id, level),
+  FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+-- Cache generated training charts
+CREATE TABLE training_charts (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  chart_data TEXT, -- JSON OHLCV array
+  target_patterns TEXT, -- JSON array of {pattern, index}
+  difficulty TEXT,
+  created_at INTEGER,
+  used_at INTEGER,
+  FOREIGN KEY (user_id) REFERENCES users(id)
+);
+```
+
+#### API Endpoints
+
+```typescript
+// Generate personalized training chart
+POST /api/quiz/generate-chart
+Body: { userId, sessionLength?, difficulty? }
+Response: { chartData, quizPoints: [{pattern, index}] }
+
+// Get user's proficiency profile
+GET /api/user/proficiency
+Response: {
+  overallLevel: 'beginner' | 'intermediate' | 'advanced',
+  patterns: [{name, mastery, proficiency, attempts}],
+  unlockedLevels: [1, 2, 3],
+  recommendations: ['Focus on Engulfing', 'Review Doji']
+}
+
+// Get curriculum progress
+GET /api/user/curriculum
+Response: {
+  currentLevel: 3,
+  progress: 0.65,
+  nextUnlock: { level: 4, requiresMastery: 0.80, currentMastery: 0.65 }
+}
+```
+
+#### User Experience Flow
+
+1. User completes "Candlestick Patterns 101" lesson
+2. System unlocks Level 1 patterns (Doji, Hammer, Shooting Star)
+3. User starts quiz session
+4. System generates chart with 3-5 seeded beginner patterns
+5. Quiz appears with clear, textbook examples
+6. User answers correctly → mastery increases
+7. After 80% mastery on Level 1, system unlocks Level 2
+8. User sees congratulations modal: "You've mastered basic patterns! 🎉"
+9. Next session includes mixed Level 1 + Level 2 patterns
+10. As mastery grows, system introduces subtle variations and edge cases
+
+#### Benefits
+
+- **Faster Learning**: Users practice what they struggle with, not random patterns
+- **Reduced Frustration**: No impossible questions on patterns they haven't learned
+- **Gamification**: Clear progression path with unlocks and achievements
+- **Engagement**: Personalized content keeps users challenged but not overwhelmed
+- **Data Insights**: Track which patterns are hardest to learn, optimize lessons
+- **Scalability**: Easy to add new patterns and difficulty tiers
+
+#### Risks & Mitigations
+
+| Risk | Mitigation |
+|------|------------|
+| Synthetic data feels unrealistic | Blend with historical data, validate with traders |
+| Pattern seeding creates obvious tells | Add noise, randomize placement, vary difficulty |
+| Users game the system (memorize charts) | Rotate chart data, regenerate weekly |
+| Chart generation is CPU intensive | Pre-generate charts, cache in D1, limit to 100 per user |
+| Difficulty calibration is too hard/easy | A/B test thresholds, collect user feedback |
+
 ### Machine Learning
 - Personalized mastery paths
 - Predictive difficulty adjustment

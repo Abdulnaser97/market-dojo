@@ -20,6 +20,7 @@ export interface QuizDialogProps {
   correctAnswer?: string;
   explanation?: string;
   showExplanation?: boolean;
+  debugMode?: boolean;
   onSelectAnswer?: (value: string) => void;
   onClose?: () => void;
 }
@@ -51,7 +52,7 @@ export default function QuizDialog(props: QuizDialogProps) {
 
   return (
     <Show when={isOpen()}>
-      {/* Overlay */}
+      {/* Container - no overlay, PatternHighlight provides the vignette */}
       <div
         style={{
           position: "fixed",
@@ -59,27 +60,27 @@ export default function QuizDialog(props: QuizDialogProps) {
           left: "0",
           right: "0",
           bottom: "0",
-          "background-color": "rgba(0, 0, 0, 0.75)",
           display: "flex",
           "align-items": "center",
           "justify-content": "flex-start",
           "z-index": "1000",
           padding: "2rem",
+          "pointer-events": "none", // Let clicks pass through to pattern highlight
         }}
-        onClick={() => props.onClose?.()}
       >
         {/* Dialog - Left Aligned */}
         <div
           style={{
-            "background-color": "var(--color-bg-primary)",
-            border: "2px solid var(--color-border)",
+            "background-color": "#1a1a1d", // Solid dark background
+            border: "3px solid #6366f1", // Indigo border to match highlight
             "border-radius": "0.75rem",
             width: "450px",
             "max-width": "100%",
             padding: "2rem",
-            "box-shadow": "0 20px 25px -5px rgba(0, 0, 0, 0.3)",
+            "box-shadow": "0 0 40px rgba(99, 102, 241, 0.4), 0 25px 50px -12px rgba(0, 0, 0, 0.5)",
             "max-height": "calc(100vh - 4rem)",
             overflow: "auto",
+            "pointer-events": "auto", // Re-enable pointer events for the dialog itself
           }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -130,6 +131,18 @@ export default function QuizDialog(props: QuizDialogProps) {
             >
               {timeRemaining()}s
             </div>
+            {props.debugMode && (
+              <div
+                style={{
+                  "font-size": "0.75rem",
+                  "margin-top": "0.5rem",
+                  color: "var(--color-warning)",
+                  "font-weight": "600",
+                }}
+              >
+                ⏸ TIMER PAUSED (Debug Mode)
+              </div>
+            )}
           </div>
 
           {/* Question */}

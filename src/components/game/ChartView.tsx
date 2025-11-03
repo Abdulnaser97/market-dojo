@@ -1,16 +1,28 @@
-import { createEffect, onCleanup, onMount } from "solid-js";
+import { createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import type { CandlestickData } from "lightweight-charts";
+import type { Pattern } from "~/game/PatternService";
+import PatternHighlight from "./PatternHighlight";
 
 interface ChartViewProps {
   data: CandlestickData[];
   width?: number;
   height?: number;
+  highlightPattern?: Pattern | null;
+  showHighlight?: boolean;
 }
+
+// Dimmed colors for non-pattern candles
+const DIMMED_UP_COLOR = "#1a4d2e"; // Dark muted green
+const DIMMED_DOWN_COLOR = "#4d1a1a"; // Dark muted red
+const DIMMED_BORDER_UP = "#1a4d2e";
+const DIMMED_BORDER_DOWN = "#4d1a1a";
+const DIMMED_WICK_UP = "#1a4d2e";
+const DIMMED_WICK_DOWN = "#4d1a1a";
 
 export default function ChartView(props: ChartViewProps) {
   let containerRef: HTMLDivElement | undefined;
-  let chart: any;
-  let candlestickSeries: any;
+  const [chart, setChart] = createSignal<any>(null);
+  const [candlestickSeries, setCandlestickSeries] = createSignal<any>(null);
   let resizeHandler: (() => void) | undefined;
   let lastUpdateTime: number | null = null;
 
@@ -19,8 +31,9 @@ export default function ChartView(props: ChartViewProps) {
     if (resizeHandler) {
       window.removeEventListener("resize", resizeHandler);
     }
-    if (chart) {
-      chart.remove();
+    const chartInstance = chart();
+    if (chartInstance) {
+      chartInstance.remove();
     }
   });
 
@@ -32,7 +45,7 @@ export default function ChartView(props: ChartViewProps) {
     const { createChart, CandlestickSeries } = LightweightCharts;
 
     // Create chart instance
-    chart = createChart(containerRef, {
+    const chartInstance = createChart(containerRef, {
       width: props.width || containerRef.clientWidth,
       height: props.height || 600,
       layout: {
@@ -69,7 +82,7 @@ export default function ChartView(props: ChartViewProps) {
     });
 
     // Add candlestick series (API v5 uses addSeries instead of addCandlestickSeries)
-    candlestickSeries = chart.addSeries(CandlestickSeries, {
+    const seriesInstance = chartInstance.addSeries(CandlestickSeries, {
       upColor: "#22c55e", // Green for bullish
       downColor: "#ef4444", // Red for bearish
       borderUpColor: "#22c55e",
@@ -80,31 +93,37 @@ export default function ChartView(props: ChartViewProps) {
 
     // Set initial data
     if (props.data.length > 0) {
-      candlestickSeries.setData(props.data);
-      chart.timeScale().fitContent();
+      seriesInstance.setData(props.data);
+      chartInstance.timeScale().fitContent();
       lastUpdateTime = props.data[props.data.length - 1].time as number;
       console.log("[ChartView] Initial data set:", props.data.length, "candles, last time:", lastUpdateTime);
     }
 
     // Handle window resize
     resizeHandler = () => {
-      if (chart && containerRef) {
-        chart.applyOptions({
+      const currentChart = chart();
+      if (currentChart && containerRef) {
+        currentChart.applyOptions({
           width: containerRef.clientWidth,
         });
       }
     };
 
     window.addEventListener("resize", resizeHandler);
+
+    // Set signals to make them reactive
+    setChart(chartInstance);
+    setCandlestickSeries(seriesInstance);
   });
 
   // Update data when props change - following Lightweight Charts realtime pattern
   createEffect(() => {
+    const series = candlestickSeries();
     console.log("[ChartView] createEffect fired, data length:", props.data.length);
-    console.log("[ChartView] candlestickSeries exists?", !!candlestickSeries);
+    console.log("[ChartView] candlestickSeries exists?", !!series);
     console.log("[ChartView] lastUpdateTime:", lastUpdateTime);
 
-    if (!candlestickSeries) {
+    if (!series) {
       console.log("[ChartView] No candlestickSeries, skipping update");
       return;
     }
@@ -113,7 +132,7 @@ export default function ChartView(props: ChartViewProps) {
 
     // If data is empty, clear the chart (but keep ready for updates)
     if (dataLength === 0) {
-      candlestickSeries.setData([]);
+      series.setData([]);
       lastUpdateTime = -1; // Sentinel: cleared and ready for updates
       console.log("[ChartView] Chart cleared, ready for updates");
       return;
@@ -126,24 +145,25 @@ export default function ChartView(props: ChartViewProps) {
     // After clearing (lastUpdateTime === -1), start using update()
     if (lastUpdateTime === -1) {
       console.log("[ChartView] Calling update() for first candle after clear");
-      candlestickSeries.update(lastCandle);
+      series.update(lastCandle);
       lastUpdateTime = candleTime;
       console.log("[ChartView] First update after clear, time:", candleTime);
     }
     // If this is a new candle (different timestamp), use update() for realtime addition
     else if (lastUpdateTime !== null && candleTime !== lastUpdateTime) {
       console.log("[ChartView] Calling update() for new candle");
-      candlestickSeries.update(lastCandle);
+      series.update(lastCandle);
       lastUpdateTime = candleTime;
       console.log("[ChartView] Realtime update - new candle at time:", candleTime);
     }
     // Initial data load
     else if (lastUpdateTime === null) {
       console.log("[ChartView] Calling setData() for initial load");
-      candlestickSeries.setData(props.data);
+      series.setData(props.data);
       lastUpdateTime = candleTime;
-      if (chart) {
-        chart.timeScale().fitContent();
+      const currentChart = chart();
+      if (currentChart) {
+        currentChart.timeScale().fitContent();
       }
       console.log("[ChartView] Full data load -", dataLength, "candles");
     }
@@ -152,14 +172,77 @@ export default function ChartView(props: ChartViewProps) {
     }
   });
 
+  // Apply dimmed colors when quiz is active
+  createEffect(() => {
+    const series = candlestickSeries();
+    if (!series || props.data.length === 0) return;
+
+    const patternIndices = props.highlightPattern?.candleIndices || [];
+    const isActive = props.showHighlight;
+
+    console.log("[ChartView] Dimming effect - active:", isActive, "pattern indices:", patternIndices);
+
+    if (isActive && patternIndices.length > 0) {
+      // Apply dimmed colors to all candles except pattern candles
+      const updatedData = props.data.map((candle, index) => {
+        const isPatternCandle = patternIndices.includes(index);
+
+        if (isPatternCandle) {
+          // Pattern candles: remove custom colors to use series defaults (bright)
+          const { color, wickColor, borderColor, ...cleanCandle } = candle as any;
+          return cleanCandle;
+        } else {
+          // Non-pattern candles: apply dimmed colors
+          const isBullish = candle.close >= candle.open;
+          return {
+            ...candle,
+            color: isBullish ? DIMMED_UP_COLOR : DIMMED_DOWN_COLOR,
+            wickColor: isBullish ? DIMMED_WICK_UP : DIMMED_WICK_DOWN,
+            borderColor: isBullish ? DIMMED_BORDER_UP : DIMMED_BORDER_DOWN,
+          };
+        }
+      });
+
+      series.setData(updatedData);
+      console.log("[ChartView] Applied dimmed colors, pattern candles:", patternIndices);
+    } else {
+      // Quiz inactive: restore original colors by removing custom color properties
+      const restoredData = props.data.map((candle) => {
+        const { color, wickColor, borderColor, ...cleanCandle } = candle as any;
+        return cleanCandle;
+      });
+
+      series.setData(restoredData);
+      console.log("[ChartView] Restored original colors");
+    }
+  });
+
   return (
     <div
-      ref={containerRef}
       style={{
         width: "100%",
         height: props.height ? `${props.height}px` : "600px",
         position: "relative",
       }}
-    />
+    >
+      {/* Chart canvas */}
+      <div
+        ref={containerRef}
+        style={{
+          width: "100%",
+          height: "100%",
+        }}
+      />
+
+      {/* Pattern highlight overlay */}
+      <PatternHighlight
+        pattern={props.highlightPattern ?? null}
+        data={props.data}
+        chartContainer={containerRef ?? null}
+        chart={chart()}
+        series={candlestickSeries()}
+        isActive={props.showHighlight ?? false}
+      />
+    </div>
   );
 }
