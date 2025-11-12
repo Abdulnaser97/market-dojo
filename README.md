@@ -93,7 +93,7 @@ Check out this interactive walkthrough of the `market-dojo` codebase on CodeCanv
 
 To refine existing dataflow simulation or create new ones, follow the quick tutorial [here](https://docs.code-canvas.com/updating-diagram).
 
-<img width="1916" alt="CodeCanvas Screenshot" src="https://codecanvas-media-public.s3.amazonaws.com/images/codecanvas-readme-screenshot.png" />
+<img width="1818" height="915" alt="image" src="https://github.com/user-attachments/assets/195409ac-b5bb-42c4-91a5-6e70de1479e2" />
 
 
 🧪 Deployment
